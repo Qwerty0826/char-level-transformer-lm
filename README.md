@@ -32,6 +32,38 @@ The architecture follows modern LLM design choices used in Llama, Mistral, and G
 
 ---
 
+## Demo
+
+### Web playground
+
+The Gradio playground (`scripts/playground.py`) loads a trained checkpoint and exposes it as an interactive web UI: all five sampling controls as live sliders, token-by-token streaming into the output box, and a live tokens/sec metric.
+
+![Playground — Generate tab](docs/playground-generate.png)
+
+*Prompt: `Once upon a time there was a little girl who`.  Settings: temperature 0.75, top-p 0.95, top-k 40, min-p 0.05, repetition penalty 1.1, max 300 tokens.  130 tokens streamed at 33 tok/s.  The model produces a complete arc — discovery, twist, resolution — and terminates itself with `<|endoftext|>` after wrapping up the story.*
+
+### Side-by-side sampling comparison
+
+The **Compare** tab generates two completions from the same prompt with two different sampling configurations, so the effect of each knob is visible at a glance instead of buried in CLI flags.
+
+![Playground — Compare tab](docs/playground-compare.png)
+
+Same prompt (`Once upon a time there was a little girl who`), same checkpoint, same 150-token budget — only sampling differs:
+
+| | **Config A — conservative** | **Config B — exploratory** |
+|---|---|---|
+| Temperature | 0.4 | 1.2 |
+| Top-p | 0.85 | 0.98 |
+| Top-k | 20 | 100 |
+
+**Config A** gives a circular, grammatically clean story — a girl, a ball, a bird that introduces itself as a talking cat, a cat that becomes friends with the cat.  The distribution is sharp, so the model picks the most probable token at every step and stays inside well-trodden TinyStories phrasing.
+
+**Config B** is dramatically more inventive — *“she was drinking her vehicle”*, *“Today is silence silence. Whiskeric!”*, *“a magical fairy appeared in the air”*.  Vocabulary is wider (cows, vehicle, network, sneezing, fairy), entities collide creatively, and coherence drops in exchange.
+
+This is *exactly* the conservatism–creativity tradeoff that temperature and top-p control.  Reading the two outputs side by side makes the sampler implementation legible without anyone needing to open the code.
+
+---
+
 ## Results (TinyStories, 5K-step run on Tesla T4)
 
 Trained the default 17M-param configuration on TinyStories for 5,000 steps with `batch_size=32`, fp32, `lr_max=1e-3`, cosine schedule, 200 warmup steps.
