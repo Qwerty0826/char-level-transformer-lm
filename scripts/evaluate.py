@@ -25,7 +25,7 @@ import torch
 from cs336_basics.model import TransformerLM
 from cs336_basics.tokenizer import Tokenizer
 from cs336_basics.training import cross_entropy_loss, get_batch
-from scripts.generate import compute_bpc, generate
+from scripts.generate import compute_bpc
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,15 +120,17 @@ def main():
         print(f"\n=== Generated Samples (T={args.temperature}, top_p={args.top_p}) ===")
         for i in range(args.generate_samples):
             print(f"\n--- Sample {i+1} ---")
-            text = generate(
-                model, tokenizer, args.prompt,
+            ids = tokenizer.encode(args.prompt)
+            prompt_t = torch.tensor([ids], dtype=torch.long, device=device)
+            out_ids = model.generate(
+                prompt_t,
                 max_new_tokens=args.max_tokens,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 eos_id=eos_id,
-                device=device,
+                use_cache=True,
             )
-            print(text)
+            print(tokenizer.decode(out_ids[0].tolist()))
 
 
 if __name__ == "__main__":
