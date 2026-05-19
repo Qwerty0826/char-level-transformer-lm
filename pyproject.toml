@@ -17,8 +17,26 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.0.0",
 ]
+test = [
+    "pytest>=7.4.0",
+]
 logging = [
     "wandb>=0.16.0",
+]
+serve = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0",
+]
+ui = [
+    "gradio>=4.0",
+]
+all = [
+    "wandb>=0.16.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0",
+    "gradio>=4.0",
 ]
 
 [build-system]
