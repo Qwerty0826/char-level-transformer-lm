@@ -1,0 +1,44 @@
+# TinyStories training config (low-resource / Apple Silicon MPS)
+# Target: validation loss <= 2.00 using ~40M tokens
+# Approx. runtime: 1-2 hrs on M1/M2 MPS, 30-40 min on M3 Max MPS
+
+# Data
+train_data: data/tinystories_tokens_train.npy
+val_data:   data/tinystories_tokens_val.npy
+
+# Tokenizer
+vocab_size: 10000
+
+# Model architecture
+context_length: 256
+d_model:        512
+num_layers:     4
+num_heads:      16
+d_ff:           1344     # ~8/3 * 512, rounded to mult of 64
+theta:          10000.0  # RoPE base frequency
+tie_weights:    true
+
+# Optimizer
+lr_max:       1.0e-3
+lr_min:       1.0e-4
+warmup_steps: 200
+total_steps:  5000
+batch_size:   32
+grad_clip:    1.0
+weight_decay: 0.1
+beta1:        0.9
+beta2:        0.95
+grad_accum_steps: 1
+
+# Compute
+dtype:   float32   # bfloat16 has broken kernels on MPS; use float32
+compile: true
+compile_backend: aot_eager   # required for MPS; Inductor is unsupported
+
+# Logging
+log_interval:        50
+val_interval:        500
+val_batches:         20
+checkpoint_dir:      checkpoints/tinystories
+checkpoint_interval: 1000
+log_csv:             logs/tinystories_train.csv
