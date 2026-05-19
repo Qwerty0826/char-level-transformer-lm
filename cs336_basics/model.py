@@ -51,6 +51,7 @@ class SwiGLUFeedForward(nn.Module):
         self,
         d_model: int,
         d_ff: int | None = None,
+        use_gate: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -58,16 +59,19 @@ class SwiGLUFeedForward(nn.Module):
         if d_ff is None:
             d_ff = _round_to_multiple(int(8 / 3 * d_model), 64)
         self.d_ff = d_ff
+        self.use_gate = use_gate
 
         self.W1 = Linear(d_model, d_ff, device=device, dtype=dtype)
         self.W2 = Linear(d_ff,   d_model, device=device, dtype=dtype)
-        self.W3 = Linear(d_model, d_ff, device=device, dtype=dtype)
+        if use_gate:
+            self.W3 = Linear(d_model, d_ff, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = self.W1(x)
-        # SiLU(gate) = gate * sigmoid(gate)
-        activated = gate * torch.sigmoid(gate)
-        return self.W2(activated * self.W3(x))
+        activated = gate * torch.sigmoid(gate)   # SiLU
+        if self.use_gate:
+            activated = activated * self.W3(x)   # SwiGLU gating
+        return self.W2(activated)
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +80,15 @@ class SwiGLUFeedForward(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Single pre-norm Transformer block.
+    Single Transformer block, supporting ablation variants.
 
+    Default (pre_norm=True, use_norm=True):
         z = x + MHA(RMSNorm(x))
         y = z + FFN(RMSNorm(z))
+
+    Ablations:
+        use_norm=False  → remove RMSNorm (identity in its place)
+        pre_norm=False  → post-norm: z = RMSNorm(x + MHA(x))
     """
 
     def __init__(
@@ -89,20 +98,32 @@ class TransformerBlock(nn.Module):
         d_ff: int | None = None,
         max_seq_len: int = 2048,
         theta: float = 10_000.0,
+        use_norm: bool = True,
+        pre_norm: bool = True,
+        use_rope: bool = True,
+        use_gate: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__()
-        self.attn_norm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.use_norm = use_norm
+        self.pre_norm = pre_norm
+
+        self.attn_norm = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
         self.attn = CausalMultiHeadSelfAttention(
-            d_model, num_heads, max_seq_len, theta, device=device, dtype=dtype
+            d_model, num_heads, max_seq_len, theta, use_rope=use_rope,
+            device=device, dtype=dtype,
         )
-        self.ff_norm = RMSNorm(d_model, device=device, dtype=dtype)
-        self.ff = SwiGLUFeedForward(d_model, d_ff, device=device, dtype=dtype)
+        self.ff_norm = RMSNorm(d_model, device=device, dtype=dtype) if use_norm else nn.Identity()
+        self.ff = SwiGLUFeedForward(d_model, d_ff, use_gate=use_gate, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.attn_norm(x))
-        x = x + self.ff(self.ff_norm(x))
+        if self.pre_norm:
+            x = x + self.attn(self.attn_norm(x))
+            x = x + self.ff(self.ff_norm(x))
+        else:
+            x = self.attn_norm(x + self.attn(x))
+            x = self.ff_norm(x + self.ff(x))
         return x
 
 
@@ -141,6 +162,10 @@ class TransformerLM(nn.Module):
         d_ff: int | None = None,
         theta: float = 10_000.0,
         tie_weights: bool = True,
+        use_norm: bool = True,
+        pre_norm: bool = True,
+        use_rope: bool = True,
+        use_gate: bool = True,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ) -> None:
@@ -154,6 +179,8 @@ class TransformerLM(nn.Module):
         self.blocks = nn.ModuleList([
             TransformerBlock(
                 d_model, num_heads, d_ff, context_length, theta,
+                use_norm=use_norm, pre_norm=pre_norm,
+                use_rope=use_rope, use_gate=use_gate,
                 device=device, dtype=dtype,
             )
             for _ in range(num_layers)

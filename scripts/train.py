@@ -50,11 +50,24 @@ from cs336_basics.training import (
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
+    # Pre-parse to detect --config so YAML values become argparse defaults.
+    # Explicit CLI args always win over the YAML file.
+    import sys
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=None)
+    pre_args, _ = pre.parse_known_args()
+    yaml_defaults: dict = {}
+    if pre_args.config:
+        import yaml
+        with open(pre_args.config) as _f:
+            yaml_defaults = yaml.safe_load(_f) or {}
+
     p = argparse.ArgumentParser(description="Train a Transformer LM from scratch")
+    p.add_argument("--config", default=None, help="YAML config file (CLI flags override)")
 
     # Data
-    p.add_argument("--train_data", required=True, help="Path to tokenised train .npy file")
-    p.add_argument("--val_data",   required=True, help="Path to tokenised val .npy file")
+    p.add_argument("--train_data", help="Path to tokenised train .npy file")
+    p.add_argument("--val_data",   help="Path to tokenised val .npy file")
 
     # Tokenizer / vocab
     p.add_argument("--vocab_size", type=int, default=10_000)
@@ -102,12 +115,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--compile_backend", default=None,
                    help="torch.compile backend (auto-selected based on device if unset)")
 
+    # Ablations (Section 7.3)
+    p.add_argument("--no_norm",    action="store_true", help="Ablation: remove RMSNorm layers")
+    p.add_argument("--post_norm",  action="store_true", help="Ablation: use post-norm instead of pre-norm")
+    p.add_argument("--no_rope",    action="store_true", help="Ablation: remove RoPE positional encoding")
+    p.add_argument("--no_gate",    action="store_true", help="Ablation: use SiLU-only FFN (remove SwiGLU gate)")
+
     # W&B
     p.add_argument("--wandb",         action="store_true", help="Enable W&B logging")
     p.add_argument("--wandb_project", default="transformer-lm")
     p.add_argument("--wandb_run",     default=None)
 
-    return p.parse_args()
+    if yaml_defaults:
+        p.set_defaults(**yaml_defaults)
+
+    args = p.parse_args()
+    if args.train_data is None or args.val_data is None:
+        p.error("--train_data and --val_data are required (or set via --config)")
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +191,10 @@ def main():
         d_ff=args.d_ff,
         theta=args.theta,
         tie_weights=not args.no_tie_weights,
+        use_norm=not args.no_norm,
+        pre_norm=not args.post_norm,
+        use_rope=not args.no_rope,
+        use_gate=not args.no_gate,
         device=device,
         dtype=dtype,
     )
