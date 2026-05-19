@@ -278,6 +278,125 @@ class TransformerLM(nn.Module):
 
     # ---- Sampling helpers --------------------------------------------------
 
+    def _apply_samplers(
+        self,
+        next_logits: torch.Tensor,
+        generated_tokens: torch.Tensor,
+        temperature: float,
+        top_p: Optional[float],
+        top_k: Optional[int],
+        min_p: Optional[float],
+        repetition_penalty: float,
+    ) -> torch.Tensor:
+        """
+        Apply repetition penalty, temperature, top-k, min-p, and top-p to a
+        single-position logits tensor and return the resulting probability
+        distribution over the vocabulary.
+
+        Order: rep-penalty → temperature → top-k → softmax → min-p → top-p.
+        """
+        next_logits = next_logits.clone()
+
+        if repetition_penalty != 1.0:
+            for tok in set(generated_tokens.tolist()):
+                if next_logits[tok] > 0:
+                    next_logits[tok] /= repetition_penalty
+                else:
+                    next_logits[tok] *= repetition_penalty
+
+        if temperature != 1.0:
+            next_logits = next_logits / max(temperature, 1e-8)
+
+        if top_k is not None and top_k > 0 and top_k < next_logits.numel():
+            kth = torch.topk(next_logits, top_k).values[-1]
+            next_logits = torch.where(
+                next_logits < kth,
+                torch.full_like(next_logits, float("-inf")),
+                next_logits,
+            )
+
+        probs = torch.softmax(next_logits, dim=-1)
+
+        if min_p is not None and min_p > 0:
+            threshold = probs.max() * min_p
+            probs = torch.where(probs < threshold, torch.zeros_like(probs), probs)
+            probs = probs / probs.sum().clamp_min(1e-12)
+
+        if top_p is not None and 0 < top_p < 1.0:
+            sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+            cumulative = torch.cumsum(sorted_probs, dim=0)
+            keep_mask = cumulative - sorted_probs <= top_p
+            keep_mask[0] = True
+            filtered = torch.zeros_like(sorted_probs)
+            filtered[keep_mask] = sorted_probs[keep_mask]
+            probs = torch.zeros_like(probs)
+            probs[sorted_idx] = filtered
+            probs = probs / probs.sum().clamp_min(1e-12)
+
+        return probs
+
+    @torch.no_grad()
+    def generate_stream(
+        self,
+        prompt_ids: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        repetition_penalty: float = 1.0,
+        eos_id: Optional[int] = None,
+        use_cache: bool = True,
+    ):
+        """
+        Streaming counterpart to ``generate``: yields each new token id as
+        soon as it is sampled.  Same semantics, same KV-cache fast path.
+        Iterate to drive generation; break early to stop.
+        """
+        self.eval()
+        tokens = prompt_ids
+
+        kv_caches: Optional[ModelKVCache] = None
+        if use_cache:
+            logits, kv_caches = self.forward_with_cache(tokens, None, 0)
+        else:
+            logits = self.forward(tokens)
+        position_offset = tokens.shape[1]
+
+        for _ in range(max_new_tokens):
+            probs = self._apply_samplers(
+                logits[0, -1, :], tokens[0],
+                temperature, top_p, top_k, min_p, repetition_penalty,
+            )
+            next_token = torch.multinomial(probs, num_samples=1)
+            token_id = int(next_token.item())
+            yield token_id
+
+            tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=1)
+            if eos_id is not None and token_id == eos_id:
+                break
+
+            # Truncate (and reset the cache) if we exceed the context window.
+            if tokens.shape[1] > self.context_length:
+                kv_caches = None
+                tokens = tokens[:, -self.context_length:]
+                if use_cache:
+                    logits, kv_caches = self.forward_with_cache(tokens, None, 0)
+                else:
+                    logits = self.forward(tokens)
+                position_offset = tokens.shape[1]
+                continue
+
+            # Feed only the newest token, reusing the cache.
+            if use_cache:
+                logits, kv_caches = self.forward_with_cache(
+                    next_token.unsqueeze(0), kv_caches, position_offset,
+                )
+                position_offset += 1
+            else:
+                logits = self.forward(tokens)
+                position_offset = tokens.shape[1]
+
     @torch.no_grad()
     def generate(
         self,
@@ -295,110 +414,29 @@ class TransformerLM(nn.Module):
         KV-cached autoregressive generation.
 
         Args:
-            prompt_ids:        (1, T_prompt) LongTensor on the model's device.
-            max_new_tokens:    Maximum number of tokens to generate.
-            temperature:       Softmax temperature (>0, <1 sharper, >1 flatter).
-            top_p:             Nucleus threshold (0–1). None → no nucleus.
-            top_k:             Keep only the top-k logits. None → no top-k.
-            min_p:             Min-probability filter (Min-P sampling).
-            repetition_penalty: 1.0 = no penalty.  > 1 discourages repetition
-                               (Keskar et al. 2019).
-            eos_id:            Optional EOS token to stop at.
-            use_cache:         Enable KV cache (O(T) vs O(T²)).
+            prompt_ids:         (1, T_prompt) LongTensor on the model's device.
+            max_new_tokens:     Maximum number of tokens to generate.
+            temperature:        Softmax temperature (>0, <1 sharper, >1 flatter).
+            top_p:              Nucleus threshold (0–1). None → disabled.
+            top_k:              Keep only the top-k logits. None → disabled.
+            min_p:              Min-probability filter (Min-P sampling).
+            repetition_penalty: 1.0 = no penalty. >1 discourages repetition
+                                (Keskar et al. 2019).
+            eos_id:             Optional EOS token to stop at.
+            use_cache:          Enable KV cache (O(T) vs O(T²)).
 
         Returns:
             (1, T_prompt + N) LongTensor of full sequence.
         """
-        device = prompt_ids.device
-        self.eval()
-        tokens = prompt_ids
-
-        kv_caches: Optional[ModelKVCache] = None
-        if use_cache:
-            # Prefill: process the whole prompt and cache the K/V's.
-            logits, kv_caches = self.forward_with_cache(tokens, None, 0)
-            position_offset = tokens.shape[1]
-        else:
-            logits = self.forward(tokens)
-            position_offset = tokens.shape[1]
-
-        for _ in range(max_new_tokens):
-            # Take logits for the last position.
-            next_logits = logits[0, -1, :].clone()
-
-            # Repetition penalty.
-            if repetition_penalty != 1.0:
-                generated = tokens[0]
-                for tok in set(generated.tolist()):
-                    if next_logits[tok] > 0:
-                        next_logits[tok] /= repetition_penalty
-                    else:
-                        next_logits[tok] *= repetition_penalty
-
-            # Temperature.
-            if temperature != 1.0:
-                next_logits = next_logits / max(temperature, 1e-8)
-
-            # Top-k filter.
-            if top_k is not None and top_k > 0 and top_k < next_logits.numel():
-                kth = torch.topk(next_logits, top_k).values[-1]
-                next_logits = torch.where(
-                    next_logits < kth,
-                    torch.full_like(next_logits, float("-inf")),
-                    next_logits,
-                )
-
-            probs = torch.softmax(next_logits, dim=-1)
-
-            # Min-p filter.
-            if min_p is not None and min_p > 0:
-                threshold = probs.max() * min_p
-                probs = torch.where(probs < threshold, torch.zeros_like(probs), probs)
-                probs = probs / probs.sum().clamp_min(1e-12)
-
-            # Top-p (nucleus) filter.
-            if top_p is not None and 0 < top_p < 1.0:
-                sorted_probs, sorted_idx = torch.sort(probs, descending=True)
-                cumulative = torch.cumsum(sorted_probs, dim=0)
-                keep_mask = cumulative - sorted_probs <= top_p   # include token that crosses
-                # Always keep the top-1.
-                keep_mask[0] = True
-                filtered = torch.zeros_like(sorted_probs)
-                filtered[keep_mask] = sorted_probs[keep_mask]
-                # Scatter back to vocab order.
-                probs = torch.zeros_like(probs)
-                probs[sorted_idx] = filtered
-                probs = probs / probs.sum().clamp_min(1e-12)
-
-            # Sample one token.
-            next_token = torch.multinomial(probs, num_samples=1)
-            tokens = torch.cat([tokens, next_token.unsqueeze(0)], dim=1)
-
-            if eos_id is not None and next_token.item() == eos_id:
-                break
-
-            # Truncate to context_length if it overflows.
-            if tokens.shape[1] > self.context_length:
-                # Drop the oldest token from cache; for simplicity rebuild instead.
-                kv_caches = None
-                position_offset = 0
-                tokens = tokens[:, -self.context_length:]
-                logits, kv_caches = self.forward_with_cache(tokens, None, 0) if use_cache \
-                    else (self.forward(tokens), None)
-                position_offset = tokens.shape[1]
-                continue
-
-            # Feed only the newest token, reusing the cache.
-            if use_cache:
-                logits, kv_caches = self.forward_with_cache(
-                    next_token.unsqueeze(0), kv_caches, position_offset,
-                )
-                position_offset += 1
-            else:
-                logits = self.forward(tokens)
-                position_offset = tokens.shape[1]
-
-        return tokens
+        new_ids = list(self.generate_stream(
+            prompt_ids, max_new_tokens,
+            temperature=temperature, top_p=top_p, top_k=top_k, min_p=min_p,
+            repetition_penalty=repetition_penalty, eos_id=eos_id, use_cache=use_cache,
+        ))
+        if not new_ids:
+            return prompt_ids
+        new_tensor = torch.tensor([new_ids], dtype=torch.long, device=prompt_ids.device)
+        return torch.cat([prompt_ids, new_tensor], dim=1)
 
     # ---- Diagnostics -------------------------------------------------------
 

@@ -141,3 +141,38 @@ def test_generate_with_top_p_and_top_k():
     )
     assert out.shape == (1, 8)
     assert (out >= 0).all() and (out < 32).all()
+
+
+def test_generate_stream_matches_generate():
+    """generate_stream() must yield the same tokens that generate() returns."""
+    torch.manual_seed(6)
+    model = TransformerLM(
+        vocab_size=32, context_length=16,
+        d_model=32, num_layers=1, num_heads=2, d_ff=64,
+    )
+    prompt = torch.randint(0, 32, (1, 4))
+
+    torch.manual_seed(42)
+    full = model.generate(prompt, max_new_tokens=8, temperature=0.7, top_p=0.9)
+
+    torch.manual_seed(42)
+    streamed = list(model.generate_stream(prompt, max_new_tokens=8, temperature=0.7, top_p=0.9))
+
+    assert full.shape == (1, 12)
+    assert streamed == full[0, prompt.shape[1]:].tolist()
+
+
+def test_generate_stream_yields_incrementally():
+    """generate_stream() must be a true generator (yield as it goes)."""
+    torch.manual_seed(7)
+    model = TransformerLM(
+        vocab_size=32, context_length=8,
+        d_model=32, num_layers=1, num_heads=2, d_ff=64,
+    )
+    prompt = torch.randint(0, 32, (1, 2))
+    n_yielded = 0
+    for _tok in model.generate_stream(prompt, max_new_tokens=4, temperature=1.0):
+        n_yielded += 1
+        if n_yielded == 2:
+            break
+    assert n_yielded == 2
