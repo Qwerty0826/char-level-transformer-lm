@@ -14,27 +14,33 @@ primitive tensor operations rather than imported from `torch.nn`.
 
 Highlights:
 
-- **Live Gradio playground.** All five sampling controls as sliders,
-  live token-by-token streaming, and a side-by-side comparison tab.
-  Screenshots in [Demo](#demo).
+- **Modern decoder-only Transformer:** pre-norm RMSNorm, rotary
+  position embeddings, SwiGLU feed-forward, grouped-query attention
+  with a configurable head ratio, weight tying between the token
+  embedding and the LM head.
+- **Training stack:** from-scratch AdamW with decoupled weight decay,
+  cosine learning-rate schedule with linear warmup, gradient clipping,
+  gradient accumulation, mixed precision (bfloat16), `torch.compile`,
+  checkpoint save / resume.
+- **KV-cached incremental decoding**, verified mathematically
+  equivalent to full recomputation (max error < 3 × 10⁻⁶). A
+  benchmark sweep locates the speedup crossover point as a function
+  of model size and context length.
+- **Five composable sampling strategies:** temperature, top-p, top-k,
+  min-p, repetition penalty, applied in a single pipeline.
+- **Byte-level BPE tokenizer** with GPT-2 regex pre-tokenization,
+  multiprocessing pre-tokenization, and incremental pair-count
+  updates during merge selection.
+- **Empirical methodology:** dtype-aware Model FLOPs Utilisation
+  tracking, learning-rate range finder (Smith 2015), KV-cache
+  crossover benchmark, automated ablation runner over the
+  RMSNorm / post-norm / NoPE / SwiGLU axes.
 - **OpenAI-compatible REST API.** FastAPI service with Server-Sent
   Events streaming. Drop-in for Open WebUI, SillyTavern, Jan, the
   OpenAI Python SDK, and LangChain.
-- **KV-cached incremental decoding**, verified mathematically
-  equivalent to full recomputation (max error < 3 × 10⁻⁶), with a
-  benchmark that locates the speedup crossover point.
-- **Five composable sampling strategies:** temperature, top-p, top-k,
-  min-p, repetition penalty.
-- **Byte-level BPE tokenizer** with GPT-2 regex pre-tokenization,
-  multiprocessing, and incremental pair-count updates.
-- **Modern decoder-only Transformer:** pre-norm RMSNorm, RoPE, SwiGLU,
-  grouped-query attention (configurable head ratio), weight tying.
-- **From-scratch AdamW** with decoupled weight decay, cosine LR
-  schedule, gradient clipping, mixed precision (bfloat16),
-  `torch.compile`.
-- **Engineering surface:** dtype-aware MFU tracking, learning-rate
-  range finder, KV-cache crossover benchmark, automated ablation
-  runner.
+- **Live Gradio playground.** All five sampling controls as sliders,
+  live token-by-token streaming, and a side-by-side comparison tab.
+  Screenshots in [Demo](#demo).
 - **55 unit and integration tests** run on every push to Python 3.10,
   3.11, and 3.12 via GitHub Actions.
 
