@@ -1,37 +1,42 @@
 # Transformer Language Model
 
-A decoder-only Transformer language model implemented in PyTorch using only
-primitive tensor operations and `nn.Parameter` / `nn.Module` containers. The
-architecture mirrors the design choices used in modern open-weight LLMs such
-as Llama, Mistral, and Gemma: byte-level BPE tokenization, rotary positional
-embeddings, RMSNorm with pre-norm placement, SwiGLU feed-forward networks,
-grouped-query attention, weight tying, AdamW with cosine learning-rate
-annealing, and a KV-cached inference path.
+A complete decoder-only Transformer language model, built end to end in
+PyTorch and trained from scratch.
 
-Core capabilities:
+The repository ships a trained checkpoint (TinyStories, validation
+perplexity **9.59**, **29.1% MFU** in fp32, ~30 minutes on a Tesla T4),
+an OpenAI-compatible REST API and a Gradio web playground for serving
+it, and a self-contained training, evaluation, and benchmarking
+toolchain. The architecture uses the same building blocks as current
+open-weight LLMs (rotary position embeddings, RMSNorm, SwiGLU,
+grouped-query attention, weight tying), each implemented directly from
+primitive tensor operations rather than imported from `torch.nn`.
 
-- **Byte-level BPE tokenizer.** GPT-2 regex pre-tokenization, multiprocessing
-  pre-tokenization, incremental pair-count updates during merge selection.
-- **Pre-norm Transformer** with RMSNorm, rotary position embeddings (RoPE),
-  and a SwiGLU feed-forward block (`d_ff = round_64(8/3 · d_model)`).
-- **Grouped Query Attention** with a configurable head ratio, reducing the
-  KV cache by 4–8× compared to standard multi-head attention.
-- **KV-cached incremental decoding**, verified mathematically equivalent to
-  full recomputation (max error < 3 × 10⁻⁶).
-- **AdamW** with decoupled weight decay, cosine learning-rate schedule with
-  linear warmup, gradient clipping.
-- Mixed precision (bfloat16) and `torch.compile` support.
-- Dtype-aware Model FLOPs Utilisation tracking.
-- Five composable sampling strategies: temperature, top-p, top-k, min-p,
-  repetition penalty.
-- **OpenAI-compatible REST API** with Server-Sent Events streaming. Drop-in
-  for Open WebUI, SillyTavern, Jan, the OpenAI Python SDK, and LangChain.
-- **Gradio playground** with side-by-side sampling comparison, live
-  token-by-token streaming, and a generated model card.
+Highlights:
 
-Verified by 55 unit and integration tests covering primitives, attention
-numerical equivalence under KV caching, sampling, API endpoints, and
-end-to-end overfit on a single batch.
+- **Live Gradio playground.** All five sampling controls as sliders,
+  live token-by-token streaming, and a side-by-side comparison tab.
+  Screenshots in [Demo](#demo).
+- **OpenAI-compatible REST API.** FastAPI service with Server-Sent
+  Events streaming. Drop-in for Open WebUI, SillyTavern, Jan, the
+  OpenAI Python SDK, and LangChain.
+- **KV-cached incremental decoding**, verified mathematically
+  equivalent to full recomputation (max error < 3 × 10⁻⁶), with a
+  benchmark that locates the speedup crossover point.
+- **Five composable sampling strategies:** temperature, top-p, top-k,
+  min-p, repetition penalty.
+- **Byte-level BPE tokenizer** with GPT-2 regex pre-tokenization,
+  multiprocessing, and incremental pair-count updates.
+- **Modern decoder-only Transformer:** pre-norm RMSNorm, RoPE, SwiGLU,
+  grouped-query attention (configurable head ratio), weight tying.
+- **From-scratch AdamW** with decoupled weight decay, cosine LR
+  schedule, gradient clipping, mixed precision (bfloat16),
+  `torch.compile`.
+- **Engineering surface:** dtype-aware MFU tracking, learning-rate
+  range finder, KV-cache crossover benchmark, automated ablation
+  runner.
+- **55 unit and integration tests** run on every push to Python 3.10,
+  3.11, and 3.12 via GitHub Actions.
 
 ---
 
