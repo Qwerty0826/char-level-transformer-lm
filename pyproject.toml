@@ -2,6 +2,8 @@
 name = "cs336-basics"
 version = "0.1.0"
 description = "Transformer language model built from scratch"
+license = { file = "LICENSE" }
+authors = [{ name = "Pragadeesh S K" }]
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.1.0",

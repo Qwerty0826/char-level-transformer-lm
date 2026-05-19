@@ -686,6 +686,12 @@ make the project usable as a real, demonstrable artifact.
 
 ---
 
+## License
+
+MIT. See [`LICENSE`](LICENSE).
+
+---
+
 ## References
 
 - Vaswani et al. (2017). *Attention Is All You Need.*
