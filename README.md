@@ -14,8 +14,21 @@ The architecture follows modern LLM design choices used in Llama, Mistral, and G
 - **Mixed precision** (bfloat16) and `torch.compile` support
 - **MFU tracking** (Model FLOPs Utilisation) during training
 - **Multiple sampling strategies**: temperature, top-p, top-k, min-p, repetition penalty
+- **OpenAI-compatible REST API** with SSE streaming (drop-in for Open WebUI, SillyTavern, Jan, LangChain)
+- **Gradio playground** with side-by-side sampling comparison, live token streaming, model card
 
-42 unit tests, all passing, covering primitives, attention equivalence under KV caching, and end-to-end overfit on a single batch.
+55 unit tests, all passing, covering primitives, attention equivalence under KV caching, sampling, API endpoints, and end-to-end overfit on a single batch.
+
+---
+
+## Four ways to interact with the model
+
+| Interface | Command | Use case |
+|---|---|---|
+| **Web playground** (Gradio) | `python scripts/playground.py …` | Visual demo with sampling sliders + side-by-side compare |
+| **OpenAI-compatible API** (FastAPI) | `python scripts/serve.py … --port 8000` | Drop-in for Open WebUI / SillyTavern / Jan / openai-python / LangChain |
+| **Terminal REPL** | `python scripts/chat.py …` | Quick interactive testing, `/temp 0.5`, `/top_p 0.9`, etc. |
+| **One-shot CLI** | `python scripts/generate.py …` | Scripts, automation, batch generation |
 
 ---
 
@@ -98,6 +111,11 @@ scripts/
 │                             W&B + CSV, gradient accumulation, resume)
 ├── generate.py               Text generation (KV-cached, all samplers)
 ├── chat.py                   Interactive REPL with slash-commands
+├── playground.py             Gradio web UI: sampling sliders, side-by-side
+│                             compare, live streaming, model card
+├── serve.py                  OpenAI-compatible FastAPI server with SSE
+│                             streaming (/v1/chat/completions, /v1/completions,
+│                             /v1/models, /health) — Open WebUI / SillyTavern / Jan
 ├── evaluate.py               Perplexity / BPC / sample generation
 ├── lr_find.py                Learning-rate range test (Smith 2015)
 ├── benchmark.py              Throughput / memory / MFU benchmarks
@@ -108,9 +126,11 @@ configs/
 ├── tinystories.yaml          Apple Silicon MPS / low-resource
 └── owt.yaml                  OpenWebText for CUDA
 
-tests/                        42 unit tests (pytest), all passing
-└── ...                       Includes KV-cache equivalence tests, GQA,
-                              chunked attention, sampling end-to-end
+tests/                        55 unit tests (pytest), all passing
+└── ...                       KV-cache equivalence, GQA, chunked attention,
+                              streaming generator, OpenAI API endpoints
+                              (chat/completion, streaming, stop sequences),
+                              UTF-8 streaming decoder, end-to-end overfit
 
 .github/workflows/tests.yml   CI: tests on Python 3.10 / 3.11 / 3.12
 ```
@@ -207,6 +227,63 @@ python scripts/benchmark.py --config configs/tinystories.yaml --iters 30
 
 Reports training tokens/sec, step time, peak GPU memory, and KV-cache speedup at inference (typically ≥10×).
 
+### 9. Serve as an OpenAI-compatible API
+
+```bash
+pip install -e ".[serve]"
+
+python scripts/serve.py \
+    --checkpoint checkpoints/tinystories/final.pt \
+    --vocab data/tinystories_vocab.json \
+    --merges data/tinystories_merges.txt \
+    --port 8000
+```
+
+Exposes:
+
+- `POST /v1/chat/completions` (chat messages, multi-turn)
+- `POST /v1/completions`      (legacy text completion)
+- `GET  /v1/models`           (model discovery)
+- `GET  /health`
+
+Both POST endpoints support `stream=true` for token-by-token Server-Sent Events.
+
+**Drop-in compatibility:**
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+r = client.chat.completions.create(
+    model="transformer-lm",
+    messages=[{"role": "user", "content": "Once upon a time"}],
+    max_tokens=100, temperature=0.8, top_p=0.95, stream=True,
+)
+for chunk in r:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+Works the same way with **Open WebUI** (point its OpenAI provider at `http://localhost:8000/v1`), **SillyTavern**, **Jan**, or any LangChain `ChatOpenAI` client.
+
+### 10. Serve as a Gradio web playground
+
+```bash
+pip install -e ".[ui]"
+
+python scripts/playground.py \
+    --checkpoint checkpoints/tinystories/final.pt \
+    --vocab data/tinystories_vocab.json \
+    --merges data/tinystories_merges.txt \
+    --port 7860 \
+    --share        # optional: public ngrok-style tunnel
+```
+
+Three tabs:
+- **Generate** — prompt box + sliders for all five samplers + live token streaming + tok/s metric
+- **Compare** — same prompt, two sampling configs side-by-side (visualises what each knob does)
+- **Model card** — parameters, layers, FLOPs, GQA ratio, checkpoint step
+
+Deploys cleanly to **HuggingFace Spaces** — drop the script into a Space and you have a public live demo.
+
 ---
 
 ## Key design decisions
@@ -289,15 +366,19 @@ Run with `--steps 1500` for quick signal or `--steps 5000` for the full picture.
 
 ```bash
 pytest tests/ -v
-# 42 passed in ~3 s
+# 55 passed in ~2 s
 ```
 
 The advanced test suite includes:
 
 - **`test_kv_cache_matches_full_forward`** — single-shot vs cache: identical logits
 - **`test_kv_cache_token_by_token`** — fully incremental decoding still matches
+- **`test_generate_stream_matches_generate`** — streaming generator yields the same tokens as `.generate()`
 - **`test_gqa_shape_and_kv_cache_size`** — GQA produces smaller K/V cache
 - **`test_chunked_attention_matches_full`** — memory-efficient = math-identical
+- **`test_streaming_decoder_handles_partial_utf8`** — multi-byte UTF-8 is buffered correctly
+- **`test_chat_streaming_sse_format`** — API streams in OpenAI SSE format with `[DONE]` terminator
+- **`test_stop_sequence_honored`** — `stop=["fox"]` truncates output before the trigger
 - **`test_lm_overfit_single_batch`** — full model learns a single batch
 - **`test_sdpa_causal_mask`** — future tokens can't leak into past
 
