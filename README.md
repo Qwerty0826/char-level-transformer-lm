@@ -1,16 +1,9 @@
 # Transformer Language Model
 
-A complete decoder-only Transformer language model, built end to end in
-PyTorch and trained from scratch.
-
-The repository ships a trained checkpoint (TinyStories, validation
-perplexity **9.59**, **29.1% MFU** in fp32, ~30 minutes on a Tesla T4),
-an OpenAI-compatible REST API and a Gradio web playground for serving
-it, and a self-contained training, evaluation, and benchmarking
-toolchain. The architecture uses the same building blocks as current
-open-weight LLMs (rotary position embeddings, RMSNorm, SwiGLU,
-grouped-query attention, weight tying), each implemented directly from
-primitive tensor operations rather than imported from `torch.nn`.
+A decoder-only Transformer language model implemented from scratch in
+PyTorch, using only `nn.Parameter` and raw tensor operations. The same
+architectural and training recipe that powers current open-weight LLMs,
+assembled and verified from first principles.
 
 Highlights:
 
