@@ -72,10 +72,13 @@ class RotaryPositionalEmbedding(nn.Module):
             x:               (..., seq_len, d_k)
             token_positions: (..., seq_len) integer positions
         Returns:
-            Rotated tensor of the same shape.
+            Rotated tensor of the same shape and dtype as ``x``.
         """
-        cos = self.cos_table[token_positions]  # (..., seq_len, d_k/2)
-        sin = self.sin_table[token_positions]
+        # cos/sin tables are stored in float32 for precision; cast to x's
+        # dtype so we don't accidentally upcast x to float32 here (which
+        # would create a dtype mismatch with V later in attention).
+        cos = self.cos_table[token_positions].to(x.dtype)
+        sin = self.sin_table[token_positions].to(x.dtype)
 
         x_even = x[..., 0::2]
         x_odd  = x[..., 1::2]
