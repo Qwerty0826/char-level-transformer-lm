@@ -25,33 +25,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]" || pip install -e .
-          pip install pytest
+          pip install -e ".[test,serve]"
+          pip install pytest httpx
 
       - name: Run unit tests
         run: pytest tests/ -v --tb=short
 
       - name: Smoke test — train a tiny model for 5 steps
-        run: |
-          python - <<'EOF'
-          import numpy as np, torch
-          from cs336_basics.model import TransformerLM
-          from cs336_basics.optimizer import AdamW
-          from cs336_basics.training import cross_entropy_loss, get_batch
-
-          torch.manual_seed(0)
-          data = np.random.randint(0, 100, size=1024, dtype=np.uint16)
-          model = TransformerLM(
-              vocab_size=100, context_length=16,
-              d_model=32, num_layers=2, num_heads=4, d_ff=64,
-          )
-          opt = AdamW(model.parameters(), lr=1e-3)
-          for _ in range(5):
-              x, y = get_batch(data, 4, 16, "cpu")
-              opt.zero_grad()
-              loss = cross_entropy_loss(model(x).view(-1, 100), y.view(-1))
-              loss.backward()
-              opt.step()
-          print(f"final loss: {loss.item():.4f}")
-          assert loss.item() < 10.0
-          EOF
+        run: python tests/smoke_train.py
