@@ -253,9 +253,11 @@ def main():
     Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     # -- Peak hardware FLOPs/s (for MFU calculation) -------------------------
-    # MFU = achieved_flops / peak_flops. See nanoGPT for the standard recipe.
-    # Values are bfloat16/fp16 tensor-core peaks (FLOPS).
-    PEAK_FLOPS = {
+    # MFU = achieved_flops / peak_flops.  The "right" peak depends on the
+    # numerical precision in use: tensor cores are fp16/bf16 only on most
+    # consumer cards, so fp32 training has a much lower theoretical peak.
+    # Picking the wrong table makes MFU look ~8× lower than reality.
+    PEAK_FLOPS_TC = {     # fp16 / bf16 tensor-core peaks
         "A100":    312e12,
         "H100":    989e12,
         "T4":       65e12,
@@ -264,10 +266,20 @@ def main():
         "RTX4090": 330e12,
         "RTX3090": 142e12,
     }
+    PEAK_FLOPS_FP32 = {   # plain fp32 (no tensor cores) peaks
+        "A100":   19.5e12,
+        "H100":   67.0e12,
+        "T4":      8.1e12,
+        "V100":   15.7e12,
+        "L4":     30.3e12,
+        "RTX4090": 82.6e12,
+        "RTX3090": 35.6e12,
+    }
+    peak_table = PEAK_FLOPS_FP32 if args.dtype == "float32" else PEAK_FLOPS_TC
     peak_flops = None
     if device == "cuda":
         gpu_name = torch.cuda.get_device_name(0).replace(" ", "").upper()
-        for k, v in PEAK_FLOPS.items():
+        for k, v in peak_table.items():
             if k.upper() in gpu_name:
                 peak_flops = v
                 break

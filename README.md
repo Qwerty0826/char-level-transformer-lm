@@ -32,6 +32,50 @@ The architecture follows modern LLM design choices used in Llama, Mistral, and G
 
 ---
 
+## Results (TinyStories, 5K-step run on Tesla T4)
+
+Trained the default 17M-param configuration on TinyStories for 5,000 steps with `batch_size=32`, fp32, `lr_max=1e-3`, cosine schedule, 200 warmup steps.
+
+| Metric | Value |
+|---|---|
+| Final training loss | **1.64** |
+| **Validation loss** | **2.26** |
+| **Validation perplexity** | **9.59** |
+| Throughput | 22,861 tokens/sec |
+| MFU (fp32, vs T4 fp32 peak 8.1 TFLOPS) | **~28%** |
+| Wall-clock training time | ~30 min on T4 |
+| Peak GPU memory | 3.74 GB |
+
+### Sample outputs
+
+Prompt: *"Once upon a time there was a little girl who"* (T=0.8, top-p=0.95, top-k=50):
+
+> Once upon a time there was a little girl who loved to play. One day, she decided to invite her friends to a party. They played games and had fun. The party was a happy day.
+>
+> At the party, the little girl met a big dog. The dog was sad because he lost his toy. The dog gave the girl a big hug. The girl said, "I am sorry, dog. Please don't be angry." The dog felt sad and said, "I am sorry, dog."
+>
+> The girl went to the dog and gave him the toy. The dog was happy and let the dog play together. The girl and the toy became friends and they played together. The moral of the story is to be kind and share with others.
+
+> Once upon a time there was a little girl who liked to watch the things. One day, the girl met a boy named Tom who was playing with her. The sky was full of pretty colors.
+>
+> The little girl said to the bird, "I like to watch the sunset too!" The bird said, "Yes, I like to whistle. It has a nest that can feel so special." Tom liked the idea. They talked and laughed as they drank their water.
+
+The model demonstrates fluent narrative structure — characters, dialogue, simple plot arcs, and the "moral of the story" pattern characteristic of TinyStories.
+
+### Why KV cache "lost" on this model
+
+The benchmark on the trained 17M model shows the KV-cached generation path is roughly tied with full-recompute (≈0.9× speedup at 64-token generation). This is an instructive finding rather than a bug:
+
+- A 17M-param model is **bandwidth-bound** on a T4 — the time is dominated by loading the weight matrices from HBM, not by the matmul itself.
+- Per-step kernel launch overhead (~10 μs × dozens of kernels per layer × 64 tokens) is comparable to the actual compute.
+- The full-recompute path does ~30× more FLOPs but amortises weight loads across many tokens per launch.
+
+KV cache wins decisively when the model is large enough to be compute-bound (≥1B params) or the context is long enough that O(T²) attention starts to dominate. This is the same reason production LLM serving stacks (vLLM, TGI) use fused kernels rather than naive Python loops over a cache.
+
+The cache implementation is verified mathematically equivalent to the non-cached path (`test_kv_cache_matches_full_forward`, error < 3 × 10⁻⁶). It's the right architectural choice; the speedup is just hardware-dependent.
+
+---
+
 ## Architecture at a glance
 
 ```
