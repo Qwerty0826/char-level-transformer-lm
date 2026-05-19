@@ -252,6 +252,31 @@ def main():
     # -- Checkpoint dir ------------------------------------------------------
     Path(args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
+    # -- Peak hardware FLOPs/s (for MFU calculation) -------------------------
+    # MFU = achieved_flops / peak_flops. See nanoGPT for the standard recipe.
+    # Values are bfloat16/fp16 tensor-core peaks (FLOPS).
+    PEAK_FLOPS = {
+        "A100":    312e12,
+        "H100":    989e12,
+        "T4":       65e12,
+        "V100":    125e12,
+        "L4":      121e12,
+        "RTX4090": 330e12,
+        "RTX3090": 142e12,
+    }
+    peak_flops = None
+    if device == "cuda":
+        gpu_name = torch.cuda.get_device_name(0).replace(" ", "").upper()
+        for k, v in PEAK_FLOPS.items():
+            if k.upper() in gpu_name:
+                peak_flops = v
+                break
+
+    # Per-step FLOPs ≈ 3 × forward (forward 1× + backward 2×).
+    base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+    flops_per_token_fwd = base_model.estimate_flops_per_token()
+    flops_per_step = 3 * flops_per_token_fwd * args.batch_size * args.grad_accum_steps
+
     # -- Training loop -------------------------------------------------------
     model.train()
     t0 = time.time()
@@ -291,15 +316,27 @@ def main():
             avg_loss = running_loss / args.log_interval
             elapsed  = time.time() - t0
             tokens_per_sec = tokens_processed / elapsed
+
+            # MFU: model FLOPs utilisation (achieved / hardware-peak FLOPs)
+            mfu_str = ""
+            if peak_flops is not None and elapsed > 0:
+                step_time = elapsed / max(1, step - start_step)
+                achieved_flops_per_sec = flops_per_step / step_time
+                mfu = achieved_flops_per_sec / peak_flops
+                mfu_str = f" | MFU {mfu*100:.1f}%"
+
             print(
                 f"step {step:6d} | loss {avg_loss:.4f} | "
                 f"lr {lr:.2e} | grad_norm {grad_norm:.2f} | "
-                f"{tokens_per_sec:,.0f} tok/s"
+                f"{tokens_per_sec:,.0f} tok/s{mfu_str}"
             )
             if wandb_run:
-                wandb_run.log({"train/loss": avg_loss, "train/lr": lr,
-                               "train/grad_norm": grad_norm.item(),
-                               "train/tokens_per_sec": tokens_per_sec}, step=step)
+                log_dict = {"train/loss": avg_loss, "train/lr": lr,
+                            "train/grad_norm": grad_norm.item(),
+                            "train/tokens_per_sec": tokens_per_sec}
+                if peak_flops is not None:
+                    log_dict["train/mfu"] = achieved_flops_per_sec / peak_flops
+                wandb_run.log(log_dict, step=step)
             running_loss = 0.0
 
         # -- Validation ------------------------------------------------------
