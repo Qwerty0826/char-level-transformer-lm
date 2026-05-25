@@ -33,6 +33,10 @@ wandb/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+!notebooks/*.ipynb
+
+# Assignment / reference PDFs (not source)
+*.pdf
 
 # IDE
 .idea/
