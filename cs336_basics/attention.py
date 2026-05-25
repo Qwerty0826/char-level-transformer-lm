@@ -224,6 +224,7 @@ class CausalMultiHeadSelfAttention(nn.Module):
         kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         position_offset: int = 0,
         return_cache: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
     ):
         """
         Args:
@@ -235,6 +236,10 @@ class CausalMultiHeadSelfAttention(nn.Module):
             return_cache:    If True, return ``(out, new_cache)``. If False
                              (default), return only ``out`` — preserves the
                              standard training signature.
+            attention_mask:  Optional (B, T_new) bool tensor. True = real token,
+                             False = padding. Combined with the causal mask in
+                             the training/prefill path. Padded positions cannot
+                             be attended to (key side) and contribute no signal.
         """
         B, T_new, _ = x.shape
 
@@ -268,9 +273,16 @@ class CausalMultiHeadSelfAttention(nn.Module):
         if kv_cache is None and position_offset == 0:
             # Training / prefill: standard (T, T) lower-triangular mask.
             if self.chunk_size is not None and T_new > self.chunk_size:
+                # Chunked path doesn't support padding masks; intended for long
+                # contiguous training, not batched SFT with variable lengths.
                 attn_out = chunked_causal_attention(Q, K_attn, V_attn, self.chunk_size)
             else:
-                mask = torch.ones(T_new, T_new, device=x.device, dtype=torch.bool).tril()
+                causal = torch.ones(T_new, T_new, device=x.device, dtype=torch.bool).tril()
+                if attention_mask is not None:
+                    # (B, T) keys — block attention TO padding positions.
+                    mask = causal[None, None, :, :] & attention_mask[:, None, None, :]
+                else:
+                    mask = causal
                 attn_out = scaled_dot_product_attention(Q, K_attn, V_attn, mask=mask)
         else:
             # Decoding: new queries can attend to all cached + earlier new keys.

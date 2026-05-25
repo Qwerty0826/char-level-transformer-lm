@@ -52,6 +52,43 @@ def cross_entropy_loss(
     return -target_log_probs.mean()
 
 
+def masked_cross_entropy_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Cross-entropy averaged over positions selected by ``loss_mask``.
+
+    For SFT we want loss only on assistant-response tokens; for DPO we
+    compute per-sequence log-probs over response tokens only. Both reduce
+    to the same primitive: sum(per-position-loss * mask) / sum(mask).
+
+    Args:
+        logits:    (..., vocab_size) — raw unnormalised scores.
+        targets:   (...)             — integer token indices.
+        loss_mask: (...)             — 0/1 float or bool mask. Positions
+                                       with 0 contribute nothing to the loss.
+
+    Returns:
+        Scalar masked cross-entropy. Safe when ``loss_mask.sum() == 0``
+        (returns 0 in that pathological case rather than NaN).
+    """
+    logits_max = logits.max(dim=-1, keepdim=True).values
+    shifted = logits - logits_max
+    log_sum_exp = shifted.exp().sum(dim=-1, keepdim=True).log()
+    log_probs = shifted - log_sum_exp                          # (..., V)
+
+    target_log_probs = log_probs.gather(
+        dim=-1, index=targets.unsqueeze(-1)
+    ).squeeze(-1)                                              # (...)
+
+    nll = -target_log_probs                                    # (...)
+    mask = loss_mask.to(nll.dtype)
+    denom = mask.sum().clamp_min(1.0)                          # guard /0
+    return (nll * mask).sum() / denom
+
+
 # ---------------------------------------------------------------------------
 # Cosine learning rate schedule with linear warmup
 # ---------------------------------------------------------------------------

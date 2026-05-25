@@ -138,6 +138,7 @@ class TransformerBlock(nn.Module):
         kv_cache: Optional[KVCache] = None,
         position_offset: int = 0,
         return_cache: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
     ):
         if return_cache or kv_cache is not None:
             # KV-cached path (always pre-norm; caching during training is unsupported).
@@ -150,10 +151,10 @@ class TransformerBlock(nn.Module):
             return x, new_cache
 
         if self.pre_norm:
-            x = x + self.attn(self.attn_norm(x))
+            x = x + self.attn(self.attn_norm(x), attention_mask=attention_mask)
             x = x + self.ff(self.ff_norm(x))
         else:
-            x = self.attn_norm(x + self.attn(x))
+            x = self.attn_norm(x + self.attn(x, attention_mask=attention_mask))
             x = self.ff_norm(x + self.ff(x))
         return x
 
@@ -237,10 +238,22 @@ class TransformerLM(nn.Module):
 
     # ---- Standard forward (training / non-cached inference) ----------------
 
-    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        token_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            token_ids:      (B, T) input token IDs.
+            attention_mask: Optional (B, T) bool tensor. True = real token,
+                            False = padding. Required for SFT with variable-
+                            length batched sequences; can stay None for
+                            packed pretraining.
+        """
         x = self.token_embedding(token_ids)
         for block in self.blocks:
-            x = block(x)
+            x = block(x, attention_mask=attention_mask)
         x = self.final_norm(x)
         return self.lm_head(x)
 
