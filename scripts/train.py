@@ -77,6 +77,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--d_model",        type=int,   default=512)
     p.add_argument("--num_layers",     type=int,   default=4)
     p.add_argument("--num_heads",      type=int,   default=16)
+    p.add_argument("--num_kv_heads",   type=int,   default=None,
+                   help="K/V heads for Grouped Query Attention. None = same as num_heads.")
     p.add_argument("--d_ff",           type=int,   default=1344)
     p.add_argument("--theta",          type=float, default=10_000.0, help="RoPE base frequency")
     p.add_argument("--no_tie_weights", action="store_true", help="Disable weight tying")
@@ -188,6 +190,7 @@ def main():
         d_model=args.d_model,
         num_layers=args.num_layers,
         num_heads=args.num_heads,
+        num_kv_heads=args.num_kv_heads,
         d_ff=args.d_ff,
         theta=args.theta,
         tie_weights=not args.no_tie_weights,
