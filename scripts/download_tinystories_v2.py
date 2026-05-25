@@ -42,7 +42,12 @@ CHAT_SPECIALS = [
     "<|assistant|>",
     "<|system|>",
 ]
-HF_DATASET = "roneneldan/TinyStoriesV2-GPT4"
+# The GPT-4-regenerated TinyStories live as a data file inside the original
+# roneneldan/TinyStories repo, not as a standalone HF dataset. We grab the
+# raw .txt directly with hf_hub_download — the file already uses <|endoftext|>
+# between stories, so no reformatting is needed.
+HF_DATASET = "roneneldan/TinyStories"
+HF_DATA_FILE = "TinyStoriesV2-GPT4-train.txt"
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,28 +68,35 @@ def parse_args() -> argparse.Namespace:
 
 
 def download_corpus(out_txt: Path) -> None:
-    """Download the HF dataset and write a flat .txt with EOT separators."""
-    print(f"Downloading {HF_DATASET} from Hugging Face ...")
+    """
+    Pull TinyStoriesV2-GPT4-train.txt from the HF Hub and copy it to out_txt.
+    The source file already separates stories with <|endoftext|>, so no
+    transformation is needed — we just stream the bytes.
+    """
+    print(f"Downloading {HF_DATA_FILE} from {HF_DATASET} ...")
     try:
-        from datasets import load_dataset
+        from huggingface_hub import hf_hub_download
     except ImportError as e:
         raise RuntimeError(
-            "datasets not installed. Install with: pip install datasets"
+            "huggingface_hub not installed. Install with: pip install huggingface_hub"
         ) from e
 
-    ds = load_dataset(HF_DATASET, split="train")
-    print(f"  Loaded {len(ds):,} stories")
-
     t0 = time.time()
-    with open(out_txt, "w", encoding="utf-8") as fh:
-        for i, ex in enumerate(ds):
-            text = ex.get("text", "").strip()
-            if not text:
-                continue
-            fh.write(text)
-            fh.write("\n<|endoftext|>\n")
-            if (i + 1) % 100_000 == 0:
-                print(f"  Wrote {i+1:,} stories ({fh.tell() / 1e9:.2f} GB)")
+    local_path = hf_hub_download(
+        repo_id=HF_DATASET,
+        filename=HF_DATA_FILE,
+        repo_type="dataset",
+    )
+    print(f"  Cached at {local_path}")
+
+    # Stream-copy so we don't load the whole file into memory.
+    chunk_bytes = 16 * 1024 * 1024
+    with open(local_path, "r", encoding="utf-8") as src, open(out_txt, "w", encoding="utf-8") as dst:
+        while True:
+            chunk = src.read(chunk_bytes)
+            if not chunk:
+                break
+            dst.write(chunk)
 
     size_gb = out_txt.stat().st_size / 1e9
     print(f"  Done in {time.time() - t0:.1f}s  ({size_gb:.2f} GB)")
