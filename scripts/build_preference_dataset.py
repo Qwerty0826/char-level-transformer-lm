@@ -109,22 +109,46 @@ def load_sft_model(args, device: str, dtype) -> TransformerLM:
 
 
 def load_prompts() -> list[str]:
-    """Pull held-out prompts from TinyStoriesInstruct (last 5% of train split)."""
+    """Pull held-out prompts from TinyStoriesInstruct (last 5% of train split).
+
+    The HF dataset is stored line-by-line — each row is one line, stories
+    are separated by a row whose text is '<|endoftext|>'. We accumulate
+    lines into blocks, then take everything before the 'Story:' line as
+    the prompt (constraints).
+    """
     try:
         from datasets import load_dataset
     except ImportError as e:
         raise RuntimeError("pip install datasets") from e
     ds = load_dataset("roneneldan/TinyStoriesInstruct", split="train")
-    # Use the last 5% as held-out prompts.
     start = int(len(ds) * 0.95)
+
     prompts: list[str] = []
-    for ex in ds.select(range(start, len(ds))):
-        text = ex.get("text", "") or ""
-        if "\nStory:" not in text:
-            continue
-        head = text.split("\nStory:", 1)[0].strip()
+    current: list[str] = []
+
+    def flush():
+        if not current:
+            return
+        story_idx = None
+        for i, line in enumerate(current):
+            if line.lstrip().startswith("Story:"):
+                story_idx = i
+                break
+        if story_idx is None:
+            return
+        head_lines = [l for l in current[:story_idx] if l.strip()]
+        head = "\n".join(head_lines).strip()
         if head:
             prompts.append(head)
+
+    for ex in ds.select(range(start, len(ds))):
+        line = ex.get("text", "") or ""
+        if line.strip() == "<|endoftext|>":
+            flush()
+            current.clear()
+        else:
+            current.append(line)
+    flush()  # trailing block without final separator
     return prompts
 
 
