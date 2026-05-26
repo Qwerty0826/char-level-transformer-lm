@@ -42,7 +42,7 @@ from cs336_basics.tokenizer import Tokenizer
 
 
 HF_DATASET = "roneneldan/TinyStoriesInstruct"
-STORY_MARKER = "\nStory:"
+STORY_MARKER = "Story:"
 
 
 def parse_args() -> argparse.Namespace:
