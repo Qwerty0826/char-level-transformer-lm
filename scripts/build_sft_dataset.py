@@ -2,18 +2,21 @@
 """
 Build a packed SFT dataset from roneneldan/TinyStoriesInstruct.
 
-The HF dataset's `text` field looks like:
+The HF dataset stores the original .txt file line-by-line: each row is one
+line, and stories are separated by a row whose text is `<|endoftext|>`.
+A single story block looks like:
 
-    Summary: A young girl finds a lost puppy and returns it.
     Features: Dialogue, MoralValue
     Words: puppy, return, kind
-    Random sentence: She smiled warmly at the dog.
-    Story: Once upon a time, ...
+    Summary: A young girl finds a lost puppy and returns it.
+    Story:
+    Once upon a time, ...
+    ...
+    <|endoftext|>
 
-We split each example on the literal token "Story:" — everything before
-becomes the user message (the constraints), everything after becomes the
-assistant response (the story). This preserves the natural "instruction →
-completion" structure the dataset was built for.
+We accumulate lines until the separator, then split each block on the
+"Story:" marker — lines before become the user message (constraints),
+lines after become the assistant response (the story body).
 
 Output: a single .pt file containing
     input_ids:       (N, L-1) long
@@ -43,6 +46,7 @@ from cs336_basics.tokenizer import Tokenizer
 
 HF_DATASET = "roneneldan/TinyStoriesInstruct"
 STORY_MARKER = "Story:"
+STORY_SEPARATOR = "<|endoftext|>"
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,13 +65,30 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def parse_example(text: str) -> tuple[str, str] | None:
-    """Return (user_prompt, story) or None if the example can't be split."""
-    if STORY_MARKER not in text:
+def parse_block(lines: list[str]) -> tuple[str, str] | None:
+    """Parse one story block (a list of lines between <|endoftext|> separators).
+
+    Returns (user_prompt, story) or None if no Story: marker is found or either
+    side is empty.
+    """
+    story_idx = None
+    inline_story = ""
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith(STORY_MARKER):
+            story_idx = i
+            inline_story = stripped[len(STORY_MARKER):].strip()
+            break
+    if story_idx is None:
         return None
-    head, story = text.split(STORY_MARKER, 1)
-    user = head.strip()
-    story = story.strip()
+
+    prompt_lines = [l for l in lines[:story_idx] if l.strip()]
+    body_lines = [l for l in lines[story_idx + 1:] if l.strip()]
+    if inline_story:
+        body_lines.insert(0, inline_story)
+
+    user = "\n".join(prompt_lines).strip()
+    story = "\n".join(body_lines).strip()
     if not user or not story:
         return None
     return user, story
@@ -96,27 +117,44 @@ def main():
     packed: list[tuple[list[int], list[int]]] = []
     skipped_parse = 0
     skipped_short = 0
-    for ex in ds:
-        text = ex.get("text", "") or ""
-        parsed = parse_example(text)
+    blocks_seen = 0
+    current_lines: list[str] = []
+
+    def consume_block() -> bool:
+        """Process the accumulated block; return True if we should stop."""
+        nonlocal skipped_parse, skipped_short, blocks_seen
+        blocks_seen += 1
+        parsed = parse_block(current_lines)
         if parsed is None:
             skipped_parse += 1
-            continue
+            return False
         user, story = parsed
         messages = [
             Message(role="user",      content=user),
             Message(role="assistant", content=story),
         ]
         ids, mask = format_sft_example(messages, tokenizer, args.max_length)
-        # After truncation, drop if the response is too short to be useful.
         if sum(mask) < args.min_response_tokens:
             skipped_short += 1
-            continue
+            return False
         packed.append((ids, mask))
-        if len(packed) >= args.max_examples:
-            break
+        return len(packed) >= args.max_examples
 
-    print(f"  Kept {len(packed):,} examples in {time.time() - t0:.1f}s")
+    for ex in ds:
+        line = ex.get("text", "") or ""
+        if line.strip() == STORY_SEPARATOR:
+            if current_lines:
+                stop = consume_block()
+                current_lines = []
+                if stop:
+                    break
+        else:
+            current_lines.append(line)
+    # Trailing block without final <|endoftext|>.
+    if current_lines and len(packed) < args.max_examples:
+        consume_block()
+
+    print(f"  Saw {blocks_seen:,} story blocks; kept {len(packed):,} examples in {time.time() - t0:.1f}s")
     print(f"  Skipped: parse_fail={skipped_parse:,}, too_short={skipped_short:,}")
 
     print(f"\nCollating + padding to {args.max_length} ...")
