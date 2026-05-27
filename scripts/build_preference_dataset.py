@@ -219,6 +219,12 @@ def main():
 
     prompts = load_prompts()
     print(f"\nHeld-out prompts available: {len(prompts):,}")
+    if not prompts:
+        raise SystemExit(
+            "load_prompts() returned 0 held-out prompts — the dataset format "
+            "may have changed. Inspect the first 40 rows of TinyStoriesInstruct "
+            "manually."
+        )
     n_target = min(args.num_prompts, len(prompts))
 
     out_path = Path(args.output)
@@ -252,6 +258,14 @@ def main():
     print(f"  Kept candidate pairs:  {kept}")
     print(f"  Rejected (heuristic):  {rejected}")
     print(f"  Output: {out_path}")
+
+    if kept == 0:
+        raise SystemExit(
+            "Kept 0 candidate pairs — refusing to leave an empty output file. "
+            "Either the heuristic filter is too strict, or the SFT model is "
+            "producing identical / degenerate completions. Inspect a few raw "
+            "sampled pairs before downstream labeling."
+        )
 
 
 if __name__ == "__main__":

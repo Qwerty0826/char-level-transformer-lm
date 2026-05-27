@@ -143,21 +143,53 @@ def eval_ppl(model, val_data, args, device) -> tuple[float, float]:
 
 
 def load_held_out_prompts(n: int, seed: int) -> list[str]:
+    """Pull held-out prompts from TinyStoriesInstruct (last 5% of train split).
+
+    The HF dataset is stored line-by-line — each row is one line, stories
+    are separated by a row whose text is '<|endoftext|>'. We accumulate
+    lines into blocks, then take everything before the 'Story:' line as
+    the held-out prompt.
+    """
     try:
         from datasets import load_dataset
     except ImportError as e:
         raise RuntimeError("pip install datasets") from e
     ds = load_dataset("roneneldan/TinyStoriesInstruct", split="train")
-    # Last 5% reserved as held-out (same convention as build_preference_dataset).
     start = int(len(ds) * 0.95)
+
     prompts: list[str] = []
-    for ex in ds.select(range(start, len(ds))):
-        text = ex.get("text", "") or ""
-        if "\nStory:" not in text:
-            continue
-        head = text.split("\nStory:", 1)[0].strip()
+    current: list[str] = []
+
+    def flush():
+        if not current:
+            return
+        story_idx = None
+        for i, line in enumerate(current):
+            if line.lstrip().startswith("Story:"):
+                story_idx = i
+                break
+        if story_idx is None:
+            return
+        head_lines = [l for l in current[:story_idx] if l.strip()]
+        head = "\n".join(head_lines).strip()
         if head:
             prompts.append(head)
+
+    for ex in ds.select(range(start, len(ds))):
+        line = ex.get("text", "") or ""
+        if line.strip() == "<|endoftext|>":
+            flush()
+            current.clear()
+        else:
+            current.append(line)
+    flush()
+
+    if not prompts:
+        raise RuntimeError(
+            "load_held_out_prompts found 0 prompts — the dataset format may have "
+            "changed. Inspect the first 40 rows of TinyStoriesInstruct manually."
+        )
+
     rng = random.Random(seed)
     rng.shuffle(prompts)
     return prompts[:n]
@@ -206,11 +238,12 @@ def judge_one(tok, model, prompt: str, a: str, b: str) -> str | None:
         {"role": "system", "content": JUDGE_SYSTEM},
         {"role": "user",   "content": user_text},
     ]
-    inputs = tok.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True)
-    inputs = inputs.to(model.device)
-    out = model.generate(inputs, max_new_tokens=4, do_sample=False,
+    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tok(text, return_tensors="pt").to(model.device)
+    out = model.generate(**inputs, max_new_tokens=4, do_sample=False,
                         pad_token_id=tok.eos_token_id)
-    answer = tok.decode(out[0, inputs.shape[1]:], skip_special_tokens=True).strip().upper()
+    input_len = inputs["input_ids"].shape[1]
+    answer = tok.decode(out[0, input_len:], skip_special_tokens=True).strip().upper()
     for ch in answer:
         if ch in ("A", "B"):
             return ch

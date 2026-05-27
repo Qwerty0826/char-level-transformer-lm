@@ -188,6 +188,12 @@ def main():
     print(f"  Invalid responses:  {n_invalid}")
     if swap_consistency < 0.70:
         print("  WARNING: judge swap-consistency < 70%. Preferences may be unreliable.")
+    if n_consistent == 0:
+        raise SystemExit(
+            "0 consistent pairs — the judge flipped on every pair, OR the "
+            "judge always produced invalid responses. DPO cannot run on an "
+            "empty preferences file. Try a stronger judge or fewer constraints."
+        )
 
 
 if __name__ == "__main__":

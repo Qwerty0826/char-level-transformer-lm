@@ -157,6 +157,19 @@ def main():
     print(f"  Saw {blocks_seen:,} story blocks; kept {len(packed):,} examples in {time.time() - t0:.1f}s")
     print(f"  Skipped: parse_fail={skipped_parse:,}, too_short={skipped_short:,}")
 
+    if not packed:
+        raise SystemExit(
+            "Kept 0 examples — refusing to produce an empty SFT dataset. "
+            "Most likely the dataset format changed and parse_block() can no "
+            "longer find 'Story:' markers. Inspect the first 40 rows of "
+            "TinyStoriesInstruct manually."
+        )
+    if skipped_parse > blocks_seen * 0.5:
+        print(
+            f"  WARNING: parse_fail rate is {skipped_parse/blocks_seen:.1%} — "
+            "the dataset format may have drifted."
+        )
+
     print(f"\nCollating + padding to {args.max_length} ...")
     batch = pad_and_collate(packed, max_length=args.max_length, pad_id=pad_id)
 
