@@ -311,7 +311,8 @@ def build_ui(
 `logits → repetition_penalty → temperature → top_k → softmax → min_p → top_p → multinomial`
 """
 
-    with gr.Blocks(title="Transformer LM Playground") as app:
+    theme = gr.themes.Soft() if hasattr(gr, "themes") else None
+    with gr.Blocks(title="Transformer LM Playground", theme=theme) as app:
         gr.Markdown(
             "# Transformer LM Playground\n"
             f"Decoder-only Transformer (RoPE + SwiGLU + RMSNorm + GQA),  "
@@ -512,14 +513,10 @@ def main() -> None:
     print(f"[playground] {base_params:,}-param model on {device}  "
           f"({len(models)} checkpoint(s) loaded)")
     app = build_ui(models, tokenizer, device, eos_id)
-    # In Gradio 6.x, ``theme`` is passed to launch() rather than Blocks().
-    launch_kwargs = dict(
+    app.queue().launch(
         server_name=args.host, server_port=args.port,
         share=args.share, show_error=True,
     )
-    if hasattr(gr, "themes"):
-        launch_kwargs["theme"] = gr.themes.Soft()
-    app.queue().launch(**launch_kwargs)
 
 
 if __name__ == "__main__":
