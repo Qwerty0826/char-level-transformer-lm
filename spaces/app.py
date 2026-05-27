@@ -18,15 +18,12 @@ Deploy:
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-# Make the repo root importable so we can reuse scripts/playground.py.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from huggingface_hub import snapshot_download
 
+# Provided by ``cs336-basics`` installed from GitHub via requirements.txt.
 from scripts.playground import build_ui, load_models
 
 

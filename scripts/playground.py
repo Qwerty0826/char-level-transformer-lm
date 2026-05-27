@@ -44,8 +44,8 @@ import torch
 
 from cs336_basics.data_sft import ASSISTANT_TAG, EOT, USER_TAG
 from cs336_basics.model import TransformerLM
+from cs336_basics.streaming import StreamingDecoder
 from cs336_basics.tokenizer import Tokenizer
-from scripts.serve import StreamingDecoder       # re-use the API server's decoder
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from cs336_basics.model import TransformerLM
+from cs336_basics.streaming import StreamingDecoder
 from cs336_basics.tokenizer import Tokenizer
 
 
@@ -90,46 +91,6 @@ class CompletionRequest(BaseModel):
     stream: Optional[bool] = False
     stop: Optional[List[str]] = None
     n: Optional[int] = 1
-
-
-# ---------------------------------------------------------------------------
-# Streaming UTF-8 decoder
-# ---------------------------------------------------------------------------
-
-class StreamingDecoder:
-    """
-    Incremental byte-level decoder.
-
-    BPE tokens are raw byte sequences; a single token can carry the first
-    byte of a 4-byte UTF-8 codepoint with the rest delivered later.  Naive
-    per-token decode would produce U+FFFD replacement characters.  We hold
-    incomplete bytes in a buffer until they're decodable.
-    """
-
-    def __init__(self, tokenizer: Tokenizer) -> None:
-        self._tok = tokenizer
-        self._buffer: bytes = b""
-
-    def feed(self, token_id: int) -> str:
-        """Append one token's bytes; return any newly decodable text."""
-        self._buffer += self._tok._vocab[token_id]
-        try:
-            text = self._buffer.decode("utf-8")
-            self._buffer = b""
-            return text
-        except UnicodeDecodeError as e:
-            # Decode the prefix that is valid; keep the incomplete tail.
-            text = self._buffer[: e.start].decode("utf-8")
-            self._buffer = self._buffer[e.start :]
-            return text
-
-    def flush(self) -> str:
-        """Emit any remaining bytes at end-of-stream (replace if invalid)."""
-        if not self._buffer:
-            return ""
-        text = self._buffer.decode("utf-8", errors="replace")
-        self._buffer = b""
-        return text
 
 
 # ---------------------------------------------------------------------------
