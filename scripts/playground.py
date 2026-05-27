@@ -2,23 +2,34 @@
 """
 Interactive Gradio playground for a trained Transformer LM.
 
-Three tabs:
+Up to four tabs:
 
   1. Generate         single prompt + all five samplers as sliders +
                       live token-by-token streaming + tokens/sec metric.
   2. Compare          two side-by-side configs to visualise how
                       different sampling strategies change the output.
-  3. Model card       architecture stats (parameters, layers, FLOPs,
+  3. Aligned          (shown when --checkpoint_sft / --checkpoint_dpo
+                      are passed) same prompt fed to base, SFT, and DPO
+                      side by side — visualises what post-training did.
+  4. Model card       architecture stats (parameters, layers, FLOPs,
                       checkpoint step, KV-cache info).
 
 The generation streams tokens as they are sampled so the UI feels
 responsive even for long outputs.
 
-Example:
+Example (base only):
     python scripts/playground.py \\
-        --checkpoint checkpoints/tinystories/final.pt \\
-        --vocab data/tinystories_vocab.json \\
-        --merges data/tinystories_merges.txt \\
+        --checkpoint checkpoints/base_60m/final.pt \\
+        --vocab data/tinystories_v2_vocab.json \\
+        --merges data/tinystories_v2_merges.txt
+
+Example (3-way base / SFT / DPO comparison):
+    python scripts/playground.py \\
+        --checkpoint     checkpoints/base_60m/final.pt \\
+        --checkpoint_sft checkpoints/sft/final.pt \\
+        --checkpoint_dpo checkpoints/dpo/final.pt \\
+        --vocab data/tinystories_v2_vocab.json \\
+        --merges data/tinystories_v2_merges.txt \\
         --share        # exposes a public ngrok-style URL
 """
 
@@ -26,11 +37,12 @@ from __future__ import annotations
 
 import argparse
 import time
-from typing import Generator, Optional, Tuple
+from typing import Callable, Generator, Optional, Tuple
 
 import gradio as gr
 import torch
 
+from cs336_basics.data_sft import ASSISTANT_TAG, EOT, USER_TAG
 from cs336_basics.model import TransformerLM
 from cs336_basics.tokenizer import Tokenizer
 from scripts.serve import StreamingDecoder       # re-use the API server's decoder
@@ -42,23 +54,33 @@ from scripts.serve import StreamingDecoder       # re-use the API server's decod
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Gradio playground for a trained LM")
-    p.add_argument("--checkpoint", required=True)
-    p.add_argument("--vocab",      required=True)
-    p.add_argument("--merges",     required=True)
-    p.add_argument("--special_tokens", nargs="*", default=["<|endoftext|>"])
+    p.add_argument("--checkpoint", required=True,
+                   help="Base model checkpoint (pretrain output)")
+    p.add_argument("--checkpoint_sft", default=None,
+                   help="Optional SFT checkpoint; enables the Aligned tab when set")
+    p.add_argument("--checkpoint_dpo", default=None,
+                   help="Optional DPO checkpoint; enables the Aligned tab when set")
+    p.add_argument("--vocab",  required=True)
+    p.add_argument("--merges", required=True)
+    p.add_argument("--special_tokens", nargs="*",
+                   default=["<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"])
 
-    # Model shape (must match checkpoint)
-    p.add_argument("--vocab_size",     type=int, default=10_000)
-    p.add_argument("--context_length", type=int, default=256)
-    p.add_argument("--d_model",        type=int, default=512)
-    p.add_argument("--num_layers",     type=int, default=4)
-    p.add_argument("--num_heads",      type=int, default=16)
-    p.add_argument("--num_kv_heads",   type=int, default=None)
-    p.add_argument("--d_ff",           type=int, default=1344)
+    # Model shape (must match every checkpoint passed in). Defaults are the 60M
+    # post-training config. For the legacy 17M TinyStories run pass:
+    #   --vocab_size 10000 --context_length 256 --d_model 512 --num_layers 4
+    #   --num_heads 16 --d_ff 1344
+    p.add_argument("--vocab_size",     type=int, default=16_000)
+    p.add_argument("--context_length", type=int, default=512)
+    p.add_argument("--d_model",        type=int, default=640)
+    p.add_argument("--num_layers",     type=int, default=10)
+    p.add_argument("--num_heads",      type=int, default=10)
+    p.add_argument("--num_kv_heads",   type=int, default=2)
+    p.add_argument("--d_ff",           type=int, default=1728)
     p.add_argument("--theta",          type=float, default=10_000.0)
     p.add_argument("--no_tie_weights", action="store_true")
 
     p.add_argument("--device", default=None)
+    p.add_argument("--dtype",  default="float32", choices=["float32", "bfloat16"])
     p.add_argument("--host",   default="127.0.0.1")
     p.add_argument("--port",   type=int, default=7860)
     p.add_argument("--share",  action="store_true",
@@ -70,20 +92,18 @@ def parse_args() -> argparse.Namespace:
 # Model loading
 # ---------------------------------------------------------------------------
 
-def load_model(args: argparse.Namespace) -> Tuple[TransformerLM, Tokenizer, str, Optional[int], int]:
-    device = args.device
-    if device is None:
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+def _resolve_device(req: Optional[str]) -> str:
+    if req:
+        return req
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
-    tokenizer = Tokenizer.from_files(args.vocab, args.merges, args.special_tokens)
-    eos_id = tokenizer._special_to_id.get("<|endoftext|>")
 
-    model = TransformerLM(
+def _build_model(args: argparse.Namespace, device: str, dtype: torch.dtype) -> TransformerLM:
+    return TransformerLM(
         vocab_size=args.vocab_size,
         context_length=args.context_length,
         d_model=args.d_model,
@@ -94,15 +114,47 @@ def load_model(args: argparse.Namespace) -> Tuple[TransformerLM, Tokenizer, str,
         theta=args.theta,
         tie_weights=not args.no_tie_weights,
         device=device,
+        dtype=dtype,
     )
-    ckpt = torch.load(args.checkpoint, map_location=device)
+
+
+def _load_into(model: TransformerLM, checkpoint_path: str, device: str) -> int:
+    ckpt = torch.load(checkpoint_path, map_location=device)
     state = ckpt.get("model_state_dict", ckpt)
     if any(k.startswith("_orig_mod.") for k in state):
         state = {k.replace("_orig_mod.", "", 1): v for k, v in state.items()}
-    model.load_state_dict(state)
+    model.load_state_dict(state, strict=False)
     model.eval()
+    return int(ckpt.get("iteration", 0))
 
-    return model, tokenizer, device, eos_id, int(ckpt.get("iteration", 0))
+
+def load_models(args: argparse.Namespace) -> Tuple[dict, Tokenizer, str, Optional[int]]:
+    """Load base + optional SFT/DPO checkpoints sharing one tokenizer / arch.
+
+    Returns ``(models, tokenizer, device, eos_id)`` where ``models`` is a
+    dict keyed by ``"base"`` / ``"sft"`` / ``"dpo"`` with each value
+    ``{"model": TransformerLM, "step": int, "path": str}``.
+    """
+    device = _resolve_device(args.device)
+    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+
+    tokenizer = Tokenizer.from_files(args.vocab, args.merges, args.special_tokens)
+    eos_id = tokenizer._special_to_id.get("<|endoftext|>")
+
+    models: dict = {}
+    for tag, path in [
+        ("base", args.checkpoint),
+        ("sft",  args.checkpoint_sft),
+        ("dpo",  args.checkpoint_dpo),
+    ]:
+        if not path:
+            continue
+        model = _build_model(args, device, dtype)
+        step = _load_into(model, path, device)
+        models[tag] = {"model": model, "step": step, "path": path}
+        print(f"[playground] Loaded {tag.upper()} from {path}  (step {step:,})")
+
+    return models, tokenizer, device, eos_id
 
 
 # ---------------------------------------------------------------------------
@@ -190,44 +242,69 @@ def make_generator(model: TransformerLM, tokenizer: Tokenizer, device: str, eos_
     return generate_streaming, generate_one_shot
 
 
+def _strip_chat_artifacts(text: str, prompt_prefix: str) -> str:
+    """Trim the wrapped chat prompt back off the model's continuation."""
+    if text.startswith(prompt_prefix):
+        text = text[len(prompt_prefix):]
+    eot_at = text.find(EOT)
+    if eot_at != -1:
+        text = text[:eot_at]
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
 def build_ui(
-    model: TransformerLM,
+    models: dict,
     tokenizer: Tokenizer,
     device: str,
     eos_id: Optional[int],
-    ckpt_step: int,
 ) -> gr.Blocks:
-    stream_fn, oneshot_fn = make_generator(model, tokenizer, device, eos_id)
+    base = models["base"]["model"]
+    base_step = models["base"]["step"]
+    stream_fn, oneshot_fn = make_generator(base, tokenizer, device, eos_id)
+    # Per-checkpoint one-shot generators for the Aligned tab.
+    oneshot_by_tag: dict[str, Callable] = {
+        tag: make_generator(spec["model"], tokenizer, device, eos_id)[1]
+        for tag, spec in models.items()
+    }
+    extra_tags = [t for t in ("sft", "dpo") if t in models]
 
-    flops_per_seq = model.estimate_flops_per_token()
-    blocks = model.blocks
+    flops_per_seq = base.estimate_flops_per_token()
+    blocks = base.blocks
     num_q_heads = blocks[0].attn.num_q_heads
     num_kv_heads = blocks[0].attn.num_kv_heads
     d_k = blocks[0].attn.d_k
     d_ff = blocks[0].ff.d_ff
 
+    loaded_md = "  ·  ".join(
+        f"**{tag.upper()}** @ step {spec['step']:,}"
+        for tag, spec in models.items()
+    )
+
     model_card_md = f"""
-### Architecture
+### Architecture (shared by every loaded checkpoint)
 
 | Property | Value |
 |---|---|
-| Total parameters | **{model.num_parameters():,}** |
-| Non-embedding parameters | {model.num_parameters(non_embedding=True):,} |
-| Vocab size | {model.vocab_size:,} |
-| Context length | {model.context_length} |
+| Total parameters | **{base.num_parameters():,}** |
+| Non-embedding parameters | {base.num_parameters(non_embedding=True):,} |
+| Vocab size | {base.vocab_size:,} |
+| Context length | {base.context_length} |
 | Layers | {len(blocks)} |
-| Hidden dim (`d_model`) | {model.d_model} |
+| Hidden dim (`d_model`) | {base.d_model} |
 | FFN inner dim (`d_ff`) | {d_ff} |
 | Query heads | {num_q_heads} |
 | KV heads (GQA) | {num_kv_heads}{'  *(GQA enabled)*' if num_kv_heads < num_q_heads else ''} |
 | Head dim | {d_k} |
 | FLOPs / forward seq | {flops_per_seq:,} |
-| Checkpoint step | {ckpt_step:,} |
 | Device | `{device}` |
+
+### Loaded checkpoints
+
+{chr(10).join(f"- **{tag.upper()}** — step {spec['step']:,}  ·  `{spec['path']}`" for tag, spec in models.items())}
 
 ### Sampling pipeline
 
@@ -238,8 +315,9 @@ def build_ui(
         gr.Markdown(
             "# Transformer LM Playground\n"
             f"Decoder-only Transformer (RoPE + SwiGLU + RMSNorm + GQA),  "
-            f"**{model.num_parameters() / 1e6:.1f}M params**, "
-            f"context **{model.context_length}**, checkpoint at step **{ckpt_step:,}**."
+            f"**{base.num_parameters() / 1e6:.1f}M params**, "
+            f"context **{base.context_length}**.  \n"
+            f"Loaded: {loaded_md}."
         )
 
         with gr.Tab("Generate"):
@@ -340,6 +418,83 @@ def build_ui(
                 outputs=[out_a, met_a, out_b, met_b],
             )
 
+        if extra_tags:
+            with gr.Tab("Aligned (Base → SFT → DPO)"):
+                gr.Markdown(
+                    "Same prompt → every loaded checkpoint. The base model only "
+                    "saw raw stories during pretraining; SFT taught it the chat "
+                    "template; DPO sharpened it on preference pairs. Use a prompt "
+                    "phrased as a *user instruction* to see the gap.\n\n"
+                    "Base receives the raw instruction; SFT and DPO receive the "
+                    "same instruction wrapped as `<|user|>…<|endoftext|><|assistant|>` "
+                    "(the chat template they were trained on)."
+                )
+                al_prompt = gr.Textbox(
+                    label="User instruction",
+                    value="Write a short story about a girl named Lily who finds a magic stone in the forest.",
+                    lines=3,
+                )
+                with gr.Row():
+                    al_temp = gr.Slider(0.1, 2.0, value=0.8, step=0.05, label="Temperature")
+                    al_top_p = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="Top-p")
+                    al_top_k = gr.Slider(0, 200, value=50, step=1, label="Top-k")
+                    al_max = gr.Slider(16, 512, value=220, step=16, label="Max new tokens")
+                al_btn = gr.Button("Generate from every checkpoint", variant="primary")
+
+                column_labels = {
+                    "base": "Base (pretrain only)",
+                    "sft":  "+ SFT (chat-template instruction tuning)",
+                    "dpo":  "+ SFT + DPO (preference-aligned)",
+                }
+                output_boxes: dict[str, gr.Textbox] = {}
+                metric_boxes: dict[str, gr.Textbox] = {}
+                with gr.Row():
+                    for tag in ("base", *extra_tags):
+                        with gr.Column():
+                            gr.Markdown(f"#### {column_labels[tag]}")
+                            output_boxes[tag] = gr.Textbox(
+                                label="", lines=16, interactive=False,
+                                show_copy_button=True,
+                            )
+                            metric_boxes[tag] = gr.Textbox(
+                                label="metrics", lines=1, interactive=False,
+                            )
+
+                ordered_tags = ["base", *extra_tags]
+
+                def _aligned(prompt, t, p, k, mx):
+                    chat_prompt = f"{USER_TAG}{prompt.strip()}{EOT}{ASSISTANT_TAG}"
+                    outs: list[str] = []
+                    for tag in ordered_tags:
+                        raw_prompt = prompt if tag == "base" else chat_prompt
+                        text, metric = oneshot_by_tag[tag](
+                            raw_prompt, t, p, k, 0.0, 1.0, mx,
+                        )
+                        if tag != "base":
+                            text = _strip_chat_artifacts(text, chat_prompt)
+                        outs.extend([text, metric])
+                    return tuple(outs)
+
+                al_outputs: list = []
+                for tag in ordered_tags:
+                    al_outputs.append(output_boxes[tag])
+                    al_outputs.append(metric_boxes[tag])
+
+                al_btn.click(
+                    _aligned,
+                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_max],
+                    outputs=al_outputs,
+                )
+
+                gr.Examples(
+                    examples=[
+                        ["Write a short story about a girl named Lily who finds a magic stone in the forest.", 0.8, 0.95, 50, 220],
+                        ["Write a story where a small dragon learns to share its treasure.", 0.7, 0.9, 50, 220],
+                        ["Tell me a bedtime story about two friends who get lost and find their way home.", 0.8, 0.95, 50, 220],
+                    ],
+                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_max],
+                )
+
         with gr.Tab("Model card"):
             gr.Markdown(model_card_md)
 
@@ -352,10 +507,11 @@ def build_ui(
 
 def main() -> None:
     args = parse_args()
-    model, tokenizer, device, eos_id, ckpt_step = load_model(args)
-    print(f"[playground] Loaded {model.num_parameters():,}-param model on {device} "
-          f"(step {ckpt_step:,})")
-    app = build_ui(model, tokenizer, device, eos_id, ckpt_step)
+    models, tokenizer, device, eos_id = load_models(args)
+    base_params = models["base"]["model"].num_parameters()
+    print(f"[playground] {base_params:,}-param model on {device}  "
+          f"({len(models)} checkpoint(s) loaded)")
+    app = build_ui(models, tokenizer, device, eos_id)
     # In Gradio 6.x, ``theme`` is passed to launch() rather than Blocks().
     launch_kwargs = dict(
         server_name=args.host, server_port=args.port,
