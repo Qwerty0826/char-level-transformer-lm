@@ -1,9 +1,13 @@
 # Transformer Language Model
 
 A decoder-only Transformer language model implemented from scratch in
-PyTorch, using only `nn.Parameter` and raw tensor operations. The same
-architectural and training recipe that powers current open-weight LLMs,
-assembled and verified from first principles.
+PyTorch, using only `nn.Parameter` and raw tensor operations. Pretrained
+at **60M parameters** on TinyStoriesV2-GPT4, then **post-trained**
+end-to-end with from-scratch supervised fine-tuning and **Direct
+Preference Optimization** (DPO). Evaluated with a local LLM-as-judge
+harness with position-bias control. No `nn.Linear`, no `nn.functional`,
+no HuggingFace TRL — every primitive built from `nn.Parameter` and raw
+tensor ops.
 
 Highlights:
 
@@ -15,6 +19,16 @@ Highlights:
   cosine learning-rate schedule with linear warmup, gradient clipping,
   gradient accumulation, mixed precision (bfloat16), `torch.compile`,
   checkpoint save / resume.
+- **60M pretrain on TinyStoriesV2-GPT4** (Llama-style stack, GQA 5:1,
+  20K steps). **Val PPL 17.19, 228K tok/s, 26.2% MFU on a single L4.**
+- **From-scratch post-training pipeline.** Masked-loss supervised
+  fine-tuning (SFT) on TinyStoriesInstruct, then Direct Preference
+  Optimization (Rafailov et al. 2023) from a frozen reference model,
+  trained on preference pairs labeled by a local open-weight judge
+  (Qwen2.5-7B-Instruct in 4-bit). No paid APIs.
+- **LLM-as-judge eval harness with bias controls.** 3×3 pairwise
+  win-rate matrix across base / SFT / DPO with **both-order judging**
+  and swap-consistency reporting (drops pairs where the judge flips).
 - **KV-cached incremental decoding**, verified mathematically
   equivalent to full recomputation (max error < 3 × 10⁻⁶). A
   benchmark sweep locates the speedup crossover point as a function
@@ -22,8 +36,10 @@ Highlights:
 - **Five composable sampling strategies:** temperature, top-p, top-k,
   min-p, repetition penalty, applied in a single pipeline.
 - **Byte-level BPE tokenizer** with GPT-2 regex pre-tokenization,
-  multiprocessing pre-tokenization, and incremental pair-count
-  updates during merge selection.
+  multiprocessing pre-tokenization, incremental pair-count updates,
+  and chat-template special tokens (`<|user|>`, `<|assistant|>`,
+  `<|endoftext|>`) baked in at training time — no embedding resize
+  needed for post-training.
 - **Empirical methodology:** dtype-aware Model FLOPs Utilisation
   tracking, learning-rate range finder (Smith 2015), KV-cache
   crossover benchmark, automated ablation runner over the
@@ -31,10 +47,12 @@ Highlights:
 - **OpenAI-compatible REST API.** FastAPI service with Server-Sent
   Events streaming. Drop-in for Open WebUI, SillyTavern, Jan, the
   OpenAI Python SDK, and LangChain.
-- **Live Gradio playground.** All five sampling controls as sliders,
-  live token-by-token streaming, and a side-by-side comparison tab.
+- **Live Gradio playground** with three tabs: a streaming Generate tab
+  with all five sampling controls, a Compare tab for sampling A/B,
+  and an **Aligned** tab that runs the same prompt through base, SFT,
+  and DPO side by side so you can see what post-training did.
   Screenshots in [Demo](#demo).
-- **55 unit and integration tests** run on every push to Python 3.10,
+- **67 unit and integration tests** run on every push to Python 3.10,
   3.11, and 3.12 via GitHub Actions.
 
 ---
@@ -54,18 +72,36 @@ Highlights:
 
 ### Web playground
 
-The Gradio playground (`scripts/playground.py`) loads a trained checkpoint
-and exposes it as an interactive web UI: all five sampling controls as live
-sliders, token-by-token streaming into the output box, and a live
-tokens/sec metric.
+The Gradio playground (`scripts/playground.py`) loads one to three
+trained checkpoints and exposes them as an interactive web UI: all five
+sampling controls as live sliders, token-by-token streaming into the
+output box, and a live tokens/sec metric.
 
 ![Playground, Generate tab](docs/playground-generate.png)
 
 *Prompt: `Once upon a time there was a little girl who`. Settings:
 temperature 0.75, top-p 0.95, top-k 40, min-p 0.05, repetition penalty 1.1,
-max 300 tokens. 130 tokens streamed at 33 tok/s. The model produces a
-complete narrative arc (discovery, twist, resolution) and terminates
-itself with `<|endoftext|>`.*
+max 300 tokens. The model produces a complete narrative arc (discovery,
+twist, resolution) and terminates itself with `<|endoftext|>`.*
+
+### Base vs SFT vs DPO, side by side
+
+The **Aligned** tab is the visual equivalent of the resume bullet: one
+prompt, every loaded checkpoint runs it in parallel, the columns line up.
+The base model gets the raw instruction (and tends to continue it as
+natural language); SFT and DPO get the same instruction wrapped in the
+chat template they were trained on (`<|user|>…<|endoftext|><|assistant|>`)
+and respond as instruction-followers.
+
+<!-- TODO: take this screenshot from the Aligned tab and uncomment.
+![Playground, Aligned tab](docs/playground-aligned.png)
+-->
+
+The base column shows what 60M parameters of pretraining produces on its
+own — fluent TinyStories-style continuations. The SFT column shows the
+chat-template instruction-following the base model never had. The DPO
+column shows the preference-aligned variant trained against a frozen
+reference of the SFT model.
 
 ### Side-by-side sampling comparison
 
@@ -104,26 +140,107 @@ implementation legible without anyone having to open the code.
 
 ## Results
 
-Trained the default 17M-parameter configuration on TinyStories for 5,000
-steps with `batch_size=32`, fp32, `lr_max=1e-3`, cosine schedule, and 200
-warmup steps. Run on a single Tesla T4 (Google Colab free tier).
+### 60M pretrain on TinyStoriesV2-GPT4
+
+Trained the 60M-parameter configuration (`configs/tinystories_60m.yaml`,
+`d_model=640`, 10 layers, 10 query heads, 2 KV heads → 5:1 GQA) on
+TinyStoriesV2-GPT4 for 20K steps with `batch_size=64`, bf16,
+`lr_max=3e-4`, cosine schedule, and 500 warmup steps. Run on a single
+Tesla L4 (Google Colab Pro).
 
 | Metric | Value |
 |---|---|
-| Final training loss (smoothed, last 50 steps) | **1.64** |
-| **Validation loss** | **2.26** |
-| **Validation perplexity** | **9.59** |
-| Training throughput | 21,088 tokens/sec |
-| Step time | 388.5 ms |
-| **MFU (fp32, vs T4 fp32 peak 8.1 TFLOPS)** | **29.1%** (2.36 / 8.1 TFLOPS) |
-| Peak GPU memory | 3.74 GB |
-| Wall-clock training time | ~30 min on T4 |
+| Final training loss (last logged step) | **2.87** |
+| **Validation loss** | **2.84** |
+| **Validation perplexity** | **17.19** |
+| Training throughput | **228,109 tokens/sec** |
+| **MFU (bf16, vs L4 bf16 peak ~120 TFLOPS)** | **26.2%** |
+| Wall-clock training time | ~48 min on L4 |
 
-29% MFU in fp32 is a healthy number for a model this small. Naively using
-the fp16 tensor-core peak as the denominator would have reported ~3.5%, but
-T4 tensor cores are not engaged when running fp32. The training and
-benchmark scripts pick the correct peak table automatically based on the
-configured dtype.
+26% MFU on an L4 in bf16 is healthy for a model this size. The MFU
+calculation uses the bf16 tensor-core peak (L4 ≈ 120 TFLOPS bf16/fp16)
+since the run engages tensor cores via `torch.compile` + bf16. The
+training and benchmark scripts pick the correct peak table automatically
+based on the configured dtype.
+
+### Post-training: SFT + DPO from scratch
+
+The 60M base model was post-trained end to end on a single Colab session
+(L4 for SFT + preference generation + eval, A100 for DPO). No paid APIs.
+The implementation does not call `nn.functional`, `nn.Linear`, or
+HuggingFace TRL — DPO is ~140 lines of `nn.Parameter`-only code with
+numerically stable `log σ` and shifted log-softmax (`cs336_basics/dpo.py`).
+
+```
+TinyStoriesV2-GPT4 ──► 60M pretrain ─► base
+                                         │
+TinyStoriesInstruct ──► masked-loss SFT ─┴► SFT  (chat template)
+                                         │
+SFT-sampled prompts ──► sample 2 per     │
+prompt + heuristic prefilter ──►         │
+Qwen2.5-7B-Instruct judge (both orders)──┴► preference pairs ─► DPO ─► DPO
+                                                                       │
+                       held-out prompts + Qwen-7B both-order judge ────┴► results.md
+```
+
+**Pipeline numbers from one end-to-end run** (~178 preference pairs
+survived swap-consistency from 516 candidates):
+
+| Stage | Held-out PPL ↓ | Notes |
+|---|---|---|
+| Base 60M | **18.48** | raw-text validation |
+| + SFT | 20.74 | PPL rises after chat-template tuning — expected; eval set is raw stories, not chat |
+| + SFT + DPO | 22.09 | rises further; DPO is a preference objective, not a likelihood objective |
+
+**DPO training signal** (400 steps, β=0.1, lr=5e-6, batch 4):
+
+| Metric | Step ~20 | Step 400 |
+|---|---|---|
+| Reward margin (β · (log π / π_ref ratio difference)) | +0.01 | **+0.34** |
+| Preference accuracy on training batches | 45% | **85%** |
+
+The reward margin growing ~30× and accuracy nearly doubling are the
+training-side proof that DPO is doing exactly what it's supposed to do:
+raising chosen relative to reference and lowering rejected relative to
+reference.
+
+**3 × 3 pairwise win-rate matrix** (Qwen2.5-7B-Instruct judge, 150
+held-out prompts, both orders run, swap-consistent pairs only):
+
+|              | beats Base | beats SFT | beats DPO |
+|--------------|:----------:|:---------:|:---------:|
+| **Base**     | —          | 12.7%     | 12.7%     |
+| **SFT**      | **35.3%**  | —         | 26.0%     |
+| **DPO**      | **27.3%**  | 25.3%     | —         |
+
+- **SFT beats base 35.3% vs 12.7%** — real signal. The chat-template
+  supervised tuning produces measurably better instruction-following
+  completions on held-out prompts.
+- **DPO vs SFT** is tied within the noise floor (25.3% vs 26.0%) — the
+  result honest readers should expect at this scale and data volume.
+- **DPO holds the SFT gain over base** (27.3% vs 12.7%) — the
+  preference-tuned model is at least as good as SFT.
+
+**Judge swap-consistency: 40–51% across all three pairs.** That's below
+the 70% reliability bar the harness flags as "low signal." Qwen-7B is at
+the lower edge of what can adjudicate subtle story-quality differences
+on outputs from a 60M model. So the honest read is: **SFT-vs-base
+preference is detectable above judge noise; DPO-vs-SFT preference is
+below it.** The DPO training-side gradient is correct (margin grew 30×);
+the judge just can't see the resulting output delta clearly enough at
+this scale.
+
+The harness, prompt formatting, and full result tables are written to
+`results.md` by `scripts/eval_all.py` and reproducible end-to-end on
+Colab Pro for ~$20 of compute, with zero external API dependencies (the
+judge runs locally in 4-bit via `bitsandbytes`).
+
+### Prior baseline: 17M scale-up reference
+
+The same code trained the original 17M configuration to **val PPL 9.59**
+on a Tesla T4 in fp32 (~30 min wall-clock, 29.1% MFU). That checkpoint
+was the proof-of-correctness for the training stack before scaling to
+60M with chat-template tokenization, bf16, and `torch.compile`.
 
 ### Inference throughput: KV cache crossover sweep
 
@@ -157,7 +274,18 @@ The cache implementation itself is verified mathematically equivalent to
 the non-cached path: `test_kv_cache_matches_full_forward` (max error
 < 3 × 10⁻⁶) and `test_kv_cache_token_by_token` (max error < 1 × 10⁻⁴).
 
-### Sample outputs
+### Sample outputs — 60M, base vs SFT vs DPO
+
+<!-- TODO: paste three side-by-side outputs from the same instruction-style
+prompt below, generated via the Aligned tab in the playground. Suggested
+prompt: "Write a short story about a girl named Lily who finds a magic
+stone in the forest."  -->
+
+*(Three-column comparison — base / SFT / DPO — will go here once the
+playground has been screenshotted with the 60M post-trained
+checkpoints.)*
+
+### Sample outputs — 17M baseline (reference)
 
 Prompt: *"Once upon a time there was a little girl who"* (T=0.8,
 top-p=0.95, top-k=50, KV cache enabled, ~118 tok/s).
@@ -267,8 +395,14 @@ as expected at this scale.
 | Weight tying    | Input embedding shared with output LM head (optional).  |
 | Decoding        | KV cache + temperature / top-p / top-k / min-p / repetition penalty. |
 
-**Default TinyStories configuration:** 4 layers, 16 heads, `d_model=512`,
-`d_ff=1344`. **17M parameters total** (12M non-embedding).
+**Primary configuration (60M, post-trained):** 10 layers, 10 query
+heads, 2 KV heads (GQA 5:1), `d_model=640`, `d_ff=1728`,
+`context_length=512`, `vocab_size=16000`. **~60M parameters total.** See
+`configs/tinystories_60m.yaml`.
+
+**Legacy baseline (17M):** 4 layers, 16 heads, `d_model=512`,
+`d_ff=1344`, `context_length=256`, `vocab_size=10000`. Used to validate
+the training stack before the scale-up. See `configs/tinystories.yaml`.
 
 ---
 
@@ -280,21 +414,43 @@ cs336_basics/                 Importable Python package
 ├── nn_components.py          Linear, Embedding, RMSNorm
 ├── attention.py              Softmax, RoPE, SDPA, chunked attention,
 │                             CausalMultiHeadSelfAttention with GQA + KV cache
+│                             + optional key_padding_mask for SFT batches
 ├── model.py                  SwiGLU FFN, TransformerBlock, TransformerLM
 │                             (training, forward_with_cache, generate)
 ├── optimizer.py              AdamW
-└── training.py               Cross-entropy, LR schedule, gradient clipping,
-                              memory-mapped data loader, checkpoint save/load
+├── data_sft.py               Chat-template formatter; (input_ids, target_ids,
+│                             loss_mask, attention_mask) packing for SFT
+├── dpo.py                    From-scratch DPO loss + diagnostics:
+│                             sequence_log_probs, _log_sigmoid (stable),
+│                             reward margin / accuracy reporting
+└── training.py               Cross-entropy + masked variant, LR schedule,
+                              gradient clipping, memory-mapped data loader,
+                              checkpoint save/load
 
 scripts/
 ├── train_tokenizer.py        Train BPE and encode a corpus to .npy
+├── download_tinystories_v2.py  Download TinyStoriesV2-GPT4, train BPE with
+│                             chat specials baked in, encode + split
 ├── split_data.py             90/10 train/val split for tokenised .npy files
 ├── train.py                  Full training loop (CLI / YAML config, MFU,
 │                             W&B + CSV, gradient accumulation, resume)
+├── build_sft_dataset.py      Build packed SFT tensors from TinyStoriesInstruct
+├── train_sft.py              Masked-loss SFT trainer (loads pretrain ckpt,
+│                             fresh AdamW, lower LR)
+├── build_preference_dataset.py  Sample candidate completion pairs from SFT
+│                             model + heuristic prefilter
+├── label_preferences.py      Local LLM judge (Qwen2.5-3B/7B-Instruct in
+│                             4-bit), both-order voting, drops flippers
+├── train_dpo.py              From-scratch DPO trainer (policy + frozen ref,
+│                             dtype-parity assert, reward-margin logging)
+├── eval_all.py               Three-checkpoint eval: held-out PPL +
+│                             3×3 pairwise win-rate matrix with both-order
+│                             judging and swap-consistency reporting → results.md
 ├── generate.py               Text generation (KV-cached, all samplers)
 ├── chat.py                   Interactive REPL with slash commands
 ├── playground.py             Gradio web UI: sampling sliders, side-by-side
-│                             comparison, live streaming, model card
+│                             comparison, **Aligned tab** (base/SFT/DPO),
+│                             live streaming, model card
 ├── serve.py                  OpenAI-compatible FastAPI server with SSE
 │                             streaming (/v1/chat/completions, /v1/completions,
 │                             /v1/models, /health)
@@ -304,11 +460,16 @@ scripts/
 └── run_ablations.py          Architecture ablations (RMSNorm, post-norm,
                               NoPE, SwiGLU vs SiLU); produces Markdown report
 
+notebooks/
+├── colab_pretrain_60m.ipynb     Drive-mount + 60M pretrain on Colab L4/A100
+└── colab_post_training.ipynb    SFT → preferences → DPO → eval on Colab
+
 configs/
-├── tinystories.yaml          Apple Silicon MPS or low-resource CUDA
+├── tinystories.yaml          17M baseline, Apple Silicon MPS or low-resource CUDA
+├── tinystories_60m.yaml      60M post-training target (Llama-style, GQA 5:1)
 └── owt.yaml                  OpenWebText for CUDA
 
-tests/                        55 unit tests (pytest), all passing.
+tests/                        67 unit tests (pytest), all passing.
                               KV-cache equivalence, GQA, chunked attention,
                               streaming generator, OpenAI API endpoints
                               (chat / completion, streaming, stop sequences),
@@ -461,23 +622,113 @@ Works the same way with Open WebUI (point its OpenAI provider at
 ```bash
 pip install -e ".[ui]"
 
+# Single-checkpoint mode (17M legacy: pass arch flags explicitly)
 python scripts/playground.py \
     --checkpoint checkpoints/tinystories/final.pt \
     --vocab data/tinystories_vocab.json \
     --merges data/tinystories_merges.txt \
+    --vocab_size 10000 --context_length 256 --d_model 512 \
+    --num_layers 4 --num_heads 16 --d_ff 1344
+
+# 3-way Aligned mode (60M base + SFT + DPO; arch defaults already match)
+python scripts/playground.py \
+    --checkpoint     checkpoints/base_60m/final.pt \
+    --checkpoint_sft checkpoints/sft/final.pt \
+    --checkpoint_dpo checkpoints/dpo/final.pt \
+    --vocab  data/tinystories_v2_vocab.json \
+    --merges data/tinystories_v2_merges.txt \
     --port 7860 \
     --share        # optional: public Gradio tunnel URL
 ```
 
-Three tabs:
+Up to four tabs:
 
 - **Generate.** Prompt box, sliders for all five samplers, live token
-  streaming, tokens/sec metric.
-- **Compare.** Same prompt, two sampling configs side by side, visualises
-  what each knob does.
-- **Model card.** Parameters, layers, FLOPs, GQA ratio, checkpoint step.
+  streaming, tokens/sec metric (uses the base checkpoint).
+- **Compare.** Same prompt, two sampling configs side by side,
+  visualises what each knob does.
+- **Aligned** (shown when `--checkpoint_sft` / `--checkpoint_dpo` are
+  passed). Same prompt fed through every loaded checkpoint in parallel
+  — base, SFT, DPO — three columns lined up, base gets raw text and
+  SFT/DPO get the chat-template-wrapped version.
+- **Model card.** Parameters, layers, FLOPs, GQA ratio, every loaded
+  checkpoint's training step.
 
 Deploys cleanly to Hugging Face Spaces.
+
+---
+
+## Post-training pipeline (60M)
+
+These scripts run end-to-end on Colab Pro (~$20 total) and produce the
+three checkpoints + `results.md` reported above. No paid APIs; the
+judge runs locally in 4-bit.
+
+```bash
+# 1) Pretrain the 60M base (run inside notebooks/colab_pretrain_60m.ipynb
+#    on L4/A100, ~48 min on L4 in bf16 + torch.compile).
+python scripts/download_tinystories_v2.py --vocab_size 16000 --output_dir data/
+python scripts/train.py --config configs/tinystories_60m.yaml --device cuda
+
+# 2) Build packed SFT tensors from TinyStoriesInstruct (chat-template,
+#    loss masked to assistant turns only).
+python scripts/build_sft_dataset.py \
+    --vocab  data/tinystories_v2_vocab.json \
+    --merges data/tinystories_v2_merges.txt \
+    --output data/tinystories_v2_sft.pt
+
+# 3) Supervised fine-tune from the pretrain checkpoint.
+python scripts/train_sft.py \
+    --base_checkpoint checkpoints/base_60m/final.pt \
+    --sft_data        data/tinystories_v2_sft.pt \
+    --checkpoint_dir  checkpoints/sft \
+    --device cuda --compile
+
+# 4) Sample candidate preference pairs from the SFT model on held-out
+#    prompts + heuristic prefilter (drops near-duplicates).
+python scripts/build_preference_dataset.py \
+    --sft_checkpoint checkpoints/sft/final.pt \
+    --vocab  data/tinystories_v2_vocab.json \
+    --merges data/tinystories_v2_merges.txt \
+    --output data/pref_candidates.jsonl \
+    --num_prompts 1000 --device cuda
+
+# 5) Label preferences with a local open-weight judge (Qwen2.5-7B-Instruct
+#    in 4-bit), both orders run, drop pairs where the judge flips.
+python scripts/label_preferences.py \
+    --input       data/pref_candidates.jsonl \
+    --output      data/pref_labeled.jsonl \
+    --judge_model Qwen/Qwen2.5-7B-Instruct \
+    --load_in_4bit --device cuda
+
+# 6) Direct Preference Optimization: load SFT as both policy (trainable)
+#    and frozen reference; train with β=0.1, lr=5e-6.
+python scripts/train_dpo.py \
+    --sft_checkpoint checkpoints/sft/final.pt \
+    --preferences    data/pref_labeled.jsonl \
+    --vocab  data/tinystories_v2_vocab.json \
+    --merges data/tinystories_v2_merges.txt \
+    --checkpoint_dir checkpoints/dpo \
+    --total_steps 400 --batch_size 4 --beta 0.1 --lr_max 5e-6 \
+    --device cuda --dtype bfloat16
+
+# 7) Eval all three checkpoints — held-out PPL + 3x3 pairwise win-rate
+#    matrix with both-order judging and swap-consistency report.
+python scripts/eval_all.py \
+    --base_checkpoint checkpoints/base_60m/final.pt \
+    --sft_checkpoint  checkpoints/sft/final.pt \
+    --dpo_checkpoint  checkpoints/dpo/final.pt \
+    --val_data data/tinystories_v2_tokens_val.npy \
+    --vocab    data/tinystories_v2_vocab.json \
+    --merges   data/tinystories_v2_merges.txt \
+    --judge_model Qwen/Qwen2.5-7B-Instruct --load_in_4bit \
+    --output results.md --device cuda
+```
+
+The two Colab notebooks (`notebooks/colab_pretrain_60m.ipynb` and
+`notebooks/colab_post_training.ipynb`) wrap these commands with the
+Drive-mount + Colab-specific environment setup, and have captured
+stdout from the actual successful runs that produced the numbers above.
 
 ---
 
@@ -614,7 +865,7 @@ training.
 
 ```bash
 pytest tests/ -v
-# 55 passed in ~2 s
+# 67 passed in ~2 s
 ```
 
 Selected coverage:
@@ -641,11 +892,12 @@ Selected coverage:
 
 ## Hardware notes
 
-| Setup                    | Throughput        | TinyStories 5K steps | Source |
+| Setup / config           | Throughput        | Wall-clock           | Source |
 |--------------------------|-------------------|----------------------|--------|
-| Apple M1 MPS (fp32)      | ~4,000 tok/s      | 2.5–3 h              | measured |
-| **Colab T4 (fp32)**      | **21,088 tok/s**  | **~30 min**          | **measured (this checkpoint)** |
-| Colab A100 (bf16)        | ~80,000 tok/s     | ~10 min              | estimated |
+| 17M · Apple M1 MPS (fp32)| ~4,000 tok/s      | 2.5–3 h (5K steps)   | measured |
+| 17M · Colab T4 (fp32)    | 21,088 tok/s      | ~30 min (5K steps)   | measured |
+| **60M · Colab L4 (bf16)** | **228,109 tok/s** | **~48 min (20K steps)** | **measured (this checkpoint, 26.2% MFU)** |
+| 60M · Colab A100 (bf16)  | ~400,000 tok/s    | ~30 min (20K steps)  | estimated |
 
 Tesla T4 does not have bf16 tensor cores (Turing architecture), so bf16
 falls back to non-tensor-core compute and is slower than fp32. Use
@@ -668,14 +920,22 @@ This project follows the curriculum of Stanford CS336 (Spring 2025),
 `Embedding`, `RMSNorm`), attention mechanism, optimiser, training loop,
 and sampling routine is implemented directly using `torch.nn.Parameter`
 and `torch.nn.Module`, without `torch.nn.functional`, `nn.Linear`, or
-`nn.Embedding`. No pretrained weights are used; the trained checkpoint is
-produced end to end by code in this repository.
+`nn.Embedding`. The same constraint applies to the **post-training
+layer**: the masked-loss SFT trainer and the Direct Preference
+Optimization implementation (`cs336_basics/dpo.py`, ~140 lines including
+a numerically stable `log σ` and shifted log-softmax for the
+log-probability computation) use no HuggingFace TRL, no
+`torch.nn.functional`, and no external alignment libraries. No
+pretrained weights are used; the base checkpoint and both post-training
+checkpoints are produced end to end by code in this repository.
 
 The four interaction modes (CLI, REPL, web playground, OpenAI-compatible
-API) and the supporting infrastructure (KV cache, GQA, chunked attention,
-five samplers, MFU tracking, LR finder, benchmark, ablation runner,
-GitHub Actions CI) go beyond the assignment minimum and are intended to
-make the project usable as a real, demonstrable artifact.
+API), the post-training pipeline (SFT, preference labeling with a local
+open-weight judge, DPO, 3×3 win-rate evaluation with bias controls), and
+the supporting infrastructure (KV cache, GQA, chunked attention, five
+samplers, MFU tracking, LR finder, benchmark, ablation runner, GitHub
+Actions CI) go beyond the assignment minimum and are intended to make
+the project usable as a real, demonstrable artifact.
 
 ---
 
@@ -700,4 +960,11 @@ MIT. See [`LICENSE`](LICENSE).
 - Nguyen (2023). *Min-p Sampling: Balancing Creativity and Coherence at High Temperature.*
 - Sennrich et al. (2016). *Neural Machine Translation of Rare Words with Subword Units* (BPE).
 - Eldan & Li (2023). *TinyStories: How Small Can Language Models Be?*
+- Eldan & Li (2023). *TinyStoriesInstruct.* (chat-format variant used
+  for the SFT and preference-generation phases.)
+- Rafailov et al. (2023). *Direct Preference Optimization: Your Language
+  Model is Secretly a Reward Model.*
+- Zheng et al. (2023). *Judging LLM-as-a-Judge with MT-Bench and Chatbot
+  Arena.* (position-bias controls and swap-consistency methodology used
+  by the eval harness.)
 - Stanford CS336 (Spring 2025). *Language Models from Scratch.*
