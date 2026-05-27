@@ -77,17 +77,27 @@ def load_judge(name: str, device: str, load_in_4bit: bool):
     except ImportError as e:
         raise RuntimeError("pip install transformers") from e
 
-    kwargs = dict(torch_dtype=torch.bfloat16, device_map=device)
     if load_in_4bit:
         try:
             from transformers import BitsAndBytesConfig
-            kwargs["quantization_config"] = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
-                bnb_4bit_quant_type="nf4",
+            # When quantizing, do NOT pass torch_dtype — newer transformers
+            # honour torch_dtype first and materialise the full bf16 model
+            # before quantization can apply, OOM-ing large judges. Let bnb's
+            # compute_dtype handle precision; device_map="auto" lets accelerate
+            # interleave placement and quantization.
+            kwargs = dict(
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_quant_type="nf4",
+                ),
+                device_map="auto",
             )
         except ImportError:
             print("  Warning: bitsandbytes not installed; loading at bf16.")
+            kwargs = dict(torch_dtype=torch.bfloat16, device_map=device)
+    else:
+        kwargs = dict(torch_dtype=torch.bfloat16, device_map=device)
     print(f"Loading judge: {name} (4bit={load_in_4bit})")
     tok = AutoTokenizer.from_pretrained(name)
     model = AutoModelForCausalLM.from_pretrained(name, **kwargs)
