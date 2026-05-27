@@ -16,7 +16,7 @@ dependencies**.
 on a single Colab L4, DPO training-side reward margin grew **30×** over
 600 steps.
 
-[Live demo on HuggingFace Spaces](https://huggingface.co/spaces/pragadeeshsk/transformer-lm-60m) ·
+[Live demo on HuggingFace Spaces](https://huggingface.co/spaces/Grux11/transformer-lm-60m) ·
 [Sample outputs](#sample-outputs) ·
 [Reproduce the pipeline](#reproduce-the-pipeline)
 
@@ -114,7 +114,7 @@ as the proof-of-correctness data point; the 60M is the headline model.
 
 ### Live demo
 
-The [HuggingFace Space](https://huggingface.co/spaces/pragadeeshsk/transformer-lm-60m)
+The [HuggingFace Space](https://huggingface.co/spaces/Grux11/transformer-lm-60m)
 runs the **Aligned** playground: type one instruction and see the same
 prompt go through all three checkpoints (base / SFT / DPO) in parallel.
 
@@ -180,7 +180,7 @@ pip install -e ".[ui]"
 
 # Pull the 3 checkpoints + tokenizer into ./hf_cache/
 python -c "from huggingface_hub import snapshot_download; \
-           snapshot_download('pragadeeshsk/transformer-lm-60m-tinystories', \
+           snapshot_download('Grux11/transformer-lm-60m-tinystories', \
                              local_dir='hf_cache')"
 
 # Launch the Aligned (base / SFT / DPO) playground

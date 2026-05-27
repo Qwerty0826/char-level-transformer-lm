@@ -11,7 +11,7 @@ Run once (or each time you re-train) after authenticating with:
 Example:
 
     python scripts/upload_checkpoints_to_hf.py \\
-        --repo_id pragadeeshsk/transformer-lm-60m-tinystories \\
+        --repo_id Grux11/transformer-lm-60m-tinystories \\
         --base_checkpoint checkpoints/base_60m/final.pt \\
         --sft_checkpoint  checkpoints/sft_v2/final.pt \\
         --dpo_checkpoint  checkpoints/dpo_v2/final.pt \\

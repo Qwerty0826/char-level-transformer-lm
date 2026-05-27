@@ -30,7 +30,7 @@ from huggingface_hub import snapshot_download
 from scripts.playground import build_ui, load_models
 
 
-MODEL_REPO = os.environ.get("MODEL_REPO", "pragadeeshsk/transformer-lm-60m-tinystories")
+MODEL_REPO = os.environ.get("MODEL_REPO", "Grux11/transformer-lm-60m-tinystories")
 
 
 def main() -> None:
