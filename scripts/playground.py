@@ -440,8 +440,8 @@ def build_ui(
                     al_top_p = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="Top-p")
                     al_top_k = gr.Slider(0, 200, value=50, step=1, label="Top-k")
                     al_rep = gr.Slider(
-                        1.0, 2.0, value=1.15, step=0.05, label="Repetition penalty",
-                        info="1.0 = none. 1.1–1.2 reduces loops on small models.",
+                        1.0, 2.0, value=1.0, step=0.05, label="Repetition penalty",
+                        info="1.0 = none (safe for byte-level BPE; >1.05 can suppress leading-space tokens and smush words together on small models).",
                     )
                     al_max = gr.Slider(16, 512, value=220, step=16, label="Max new tokens")
                 al_btn = gr.Button("Generate from every checkpoint", variant="primary")
@@ -493,9 +493,9 @@ def build_ui(
 
                 gr.Examples(
                     examples=[
-                        ["Write a short story about a girl named Lily who finds a magic stone in the forest.", 0.7, 0.95, 50, 1.15, 220],
-                        ["Write a story where a small dragon learns to share its treasure.",                    0.7, 0.95, 50, 1.15, 220],
-                        ["Tell me a bedtime story about two friends who get lost and find their way home.",     0.7, 0.95, 50, 1.15, 220],
+                        ["Write a short story about a girl named Lily who finds a magic stone in the forest.", 0.7, 0.95, 50, 1.0, 220],
+                        ["Write a story where a small dragon learns to share its treasure.",                    0.7, 0.95, 50, 1.0, 220],
+                        ["Tell me a bedtime story about two friends who get lost and find their way home.",     0.7, 0.95, 50, 1.0, 220],
                     ],
                     inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_rep, al_max],
                 )
