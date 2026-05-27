@@ -436,9 +436,13 @@ def build_ui(
                     lines=3,
                 )
                 with gr.Row():
-                    al_temp = gr.Slider(0.1, 2.0, value=0.8, step=0.05, label="Temperature")
+                    al_temp = gr.Slider(0.1, 2.0, value=0.7, step=0.05, label="Temperature")
                     al_top_p = gr.Slider(0.0, 1.0, value=0.95, step=0.01, label="Top-p")
                     al_top_k = gr.Slider(0, 200, value=50, step=1, label="Top-k")
+                    al_rep = gr.Slider(
+                        1.0, 2.0, value=1.15, step=0.05, label="Repetition penalty",
+                        info="1.0 = none. 1.1–1.2 reduces loops on small models.",
+                    )
                     al_max = gr.Slider(16, 512, value=220, step=16, label="Max new tokens")
                 al_btn = gr.Button("Generate from every checkpoint", variant="primary")
 
@@ -463,13 +467,13 @@ def build_ui(
 
                 ordered_tags = ["base", *extra_tags]
 
-                def _aligned(prompt, t, p, k, mx):
+                def _aligned(prompt, t, p, k, rep, mx):
                     chat_prompt = f"{USER_TAG}{prompt.strip()}{EOT}{ASSISTANT_TAG}"
                     outs: list[str] = []
                     for tag in ordered_tags:
                         raw_prompt = prompt if tag == "base" else chat_prompt
                         text, metric = oneshot_by_tag[tag](
-                            raw_prompt, t, p, k, 0.0, 1.0, mx,
+                            raw_prompt, t, p, k, 0.0, rep, mx,
                         )
                         if tag != "base":
                             text = _strip_chat_artifacts(text, chat_prompt)
@@ -483,17 +487,17 @@ def build_ui(
 
                 al_btn.click(
                     _aligned,
-                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_max],
+                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_rep, al_max],
                     outputs=al_outputs,
                 )
 
                 gr.Examples(
                     examples=[
-                        ["Write a short story about a girl named Lily who finds a magic stone in the forest.", 0.8, 0.95, 50, 220],
-                        ["Write a story where a small dragon learns to share its treasure.", 0.7, 0.9, 50, 220],
-                        ["Tell me a bedtime story about two friends who get lost and find their way home.", 0.8, 0.95, 50, 220],
+                        ["Write a short story about a girl named Lily who finds a magic stone in the forest.", 0.7, 0.95, 50, 1.15, 220],
+                        ["Write a story where a small dragon learns to share its treasure.",                    0.7, 0.95, 50, 1.15, 220],
+                        ["Tell me a bedtime story about two friends who get lost and find their way home.",     0.7, 0.95, 50, 1.15, 220],
                     ],
-                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_max],
+                    inputs=[al_prompt, al_temp, al_top_p, al_top_k, al_rep, al_max],
                 )
 
         with gr.Tab("Model card"):
