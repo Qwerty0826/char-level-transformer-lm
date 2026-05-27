@@ -103,15 +103,16 @@ def judge_pair(tok, model, prompt: str, a: str, b: str, max_new_tokens: int) -> 
         {"role": "system", "content": JUDGE_SYSTEM},
         {"role": "user",   "content": user_text},
     ]
-    inputs = tok.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True)
-    inputs = inputs.to(model.device)
+    text = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tok(text, return_tensors="pt").to(model.device)
     out = model.generate(
-        inputs,
+        **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=False,
         pad_token_id=tok.eos_token_id,
     )
-    answer = tok.decode(out[0, inputs.shape[1]:], skip_special_tokens=True).strip().upper()
+    input_len = inputs["input_ids"].shape[1]
+    answer = tok.decode(out[0, input_len:], skip_special_tokens=True).strip().upper()
     # The judge sometimes adds extra punctuation/words — look for the first A or B.
     for ch in answer:
         if ch in ("A", "B"):
