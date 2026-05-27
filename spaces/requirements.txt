@@ -1,5 +1,9 @@
-gradio>=5.0
-huggingface_hub>=0.20.0
+gradio>=5.34.0
+# Gradio 5.34+ pulls a compatible huggingface_hub itself (>=0.28.1).
+huggingface_hub>=0.28.1
+# Python 3.13 removed the `audioop` stdlib module; pydub (a Gradio
+# transitive dep) needs it. `audioop-lts` provides a drop-in.
+audioop-lts ; python_version >= "3.13"
 # Install the project (cs336_basics + scripts packages) from GitHub so
 # the Space has the playground UI and model code without duplicating it.
 # Brings in torch, numpy, regex, einops, pyyaml, tqdm as transitive deps.
