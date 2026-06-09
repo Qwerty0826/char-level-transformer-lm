@@ -173,9 +173,13 @@ def main():
         # Append the new user input to context.
         new_ids = tokenizer.encode(user)
         context_ids = context_ids + new_ids
-        # Truncate from the left if we exceed the context window.
-        if len(context_ids) > model.context_length - cfg["max_tokens"]:
-            context_ids = context_ids[-(model.context_length - cfg["max_tokens"]):]
+        # Truncate from the left if we exceed the context window. Clamp the
+        # keep-window to >= 1: if /max is set at or above the context length,
+        # `context_length - max_tokens` goes non-positive and the negative
+        # slice would keep the wrong side of the history.
+        keep = max(1, model.context_length - cfg["max_tokens"])
+        if len(context_ids) > keep:
+            context_ids = context_ids[-keep:]
 
         prompt_t = torch.tensor([context_ids], dtype=torch.long, device=device)
         with torch.no_grad():

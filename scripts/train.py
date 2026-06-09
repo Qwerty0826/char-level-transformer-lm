@@ -296,6 +296,7 @@ def main():
     model.train()
     t0 = time.time()
     running_loss = 0.0
+    last_avg_loss = float("nan")    # most recent windowed train loss, for the CSV
     tokens_processed = start_step * args.batch_size * args.context_length * args.grad_accum_steps
 
     for step in range(start_step + 1, args.total_steps + 1):
@@ -329,6 +330,7 @@ def main():
         # -- Logging ---------------------------------------------------------
         if step % args.log_interval == 0:
             avg_loss = running_loss / args.log_interval
+            last_avg_loss = avg_loss
             elapsed  = time.time() - t0
             tokens_per_sec = tokens_processed / elapsed
 
@@ -366,8 +368,9 @@ def main():
             if wandb_run:
                 wandb_run.log({"val/loss": val_loss, "val/ppl": val_ppl}, step=step)
             if csv_writer:
-                avg_loss_log = running_loss / max(1, args.log_interval)
-                csv_writer.writerow([step, avg_loss_log, val_loss, lr, grad_norm.item(), elapsed])
+                # `running_loss` was just zeroed if this step also hit the
+                # log interval; use the last completed window's average.
+                csv_writer.writerow([step, last_avg_loss, val_loss, lr, grad_norm.item(), elapsed])
                 csv_file.flush()
 
         # -- Checkpoint ------------------------------------------------------

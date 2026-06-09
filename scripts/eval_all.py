@@ -196,8 +196,17 @@ def load_held_out_prompts(n: int, seed: int) -> list[str]:
 
 
 @torch.no_grad()
-def sample_completion(model, tokenizer, eot_id, prompt_text: str, args, device) -> str:
-    formatted = f"{USER_TAG}{prompt_text}{EOT}{ASSISTANT_TAG}"
+def sample_completion(
+    model, tokenizer, eot_id, prompt_text: str, args, device,
+    chat_template: bool = True,
+) -> str:
+    # SFT/DPO were trained on the chat template; the base model never saw
+    # the <|user|>/<|assistant|> tags in pretraining data and must get the
+    # raw instruction, or the win-rate comparison is rigged against it.
+    formatted = (
+        f"{USER_TAG}{prompt_text}{EOT}{ASSISTANT_TAG}" if chat_template
+        else prompt_text
+    )
     ids = torch.tensor([tokenizer.encode(formatted)], device=device, dtype=torch.long)
     out = model.generate(
         ids,
@@ -289,6 +298,9 @@ def main():
     for name in names:
         print(f"Loading {name} ...")
         model = load_lm(ckpts[name], args, device, dtype)
+        # get_batch samples via np.random; reseed per model so all three
+        # checkpoints are scored on the *same* validation batches.
+        np.random.seed(args.seed)
         loss, ppl = eval_ppl(model, val_data, args, device)
         ppl_results[name] = (loss, ppl)
         print(f"  {name}: loss {loss:.4f}  ppl {ppl:.2f}")
@@ -306,7 +318,10 @@ def main():
         model = load_lm(ckpts[name], args, device, dtype)
         t0 = time.time()
         for i, p in enumerate(prompts):
-            completions[name].append(sample_completion(model, tokenizer, eot_id, p, args, device))
+            completions[name].append(sample_completion(
+                model, tokenizer, eot_id, p, args, device,
+                chat_template=(name != "base"),
+            ))
             if (i + 1) % 25 == 0:
                 print(f"    {i+1}/{len(prompts)}  ({(time.time() - t0)/60:.1f} min)")
         del model
@@ -371,6 +386,8 @@ def main():
     lines.append(f"Judge: `{args.judge_model}`  ·  "
                  f"Prompts: {args.num_eval_prompts}  ·  Both orders run.\n")
     lines.append("Each cell = P(row beats column), consistent (non-flipped) judgements only.\n")
+    lines.append("Prompt protocol: base receives the raw instruction; SFT/DPO "
+                 "receive it wrapped in the chat template they were trained on.\n")
     lines.append("| ↓ vs → | " + " | ".join(names) + " |")
     lines.append("|---" * (len(names) + 1) + "|")
     for n1 in names:
