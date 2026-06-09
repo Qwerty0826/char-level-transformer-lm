@@ -176,3 +176,77 @@ def test_generate_stream_yields_incrementally():
         if n_yielded == 2:
             break
     assert n_yielded == 2
+
+
+def test_generate_with_overlong_prompt_truncates_instead_of_crashing():
+    """A prompt longer than context_length must be window-truncated, not
+    crash on an out-of-range RoPE table index."""
+    torch.manual_seed(8)
+    model = TransformerLM(
+        vocab_size=64, context_length=8,
+        d_model=32, num_layers=1, num_heads=2, d_ff=64,
+    )
+    prompt = torch.randint(0, 64, (1, 12))          # 12 > context_length=8
+    for use_cache in (True, False):
+        out = model.generate(prompt, max_new_tokens=3, temperature=1.0,
+                             use_cache=use_cache)
+        new = out[0, prompt.shape[1]:]
+        assert new.shape[0] == 3
+        assert (new >= 0).all() and (new < 64).all()
+
+
+def test_generation_past_context_window_stays_valid():
+    """Long generations that overflow the window repeatedly (exercising the
+    truncate-and-re-prefill hysteresis path) must keep producing valid ids."""
+    torch.manual_seed(9)
+    model = TransformerLM(
+        vocab_size=32, context_length=8,
+        d_model=32, num_layers=1, num_heads=2, d_ff=64,
+    )
+    prompt = torch.randint(0, 32, (1, 6))
+    new_ids = list(model.generate_stream(prompt, max_new_tokens=40, temperature=1.0))
+    assert len(new_ids) == 40
+    assert all(0 <= t < 32 for t in new_ids)
+
+
+def test_kv_cache_matches_full_forward_post_norm():
+    """The cached path must mirror the post-norm ablation wiring, not
+    silently fall back to pre-norm."""
+    torch.manual_seed(10)
+    model = TransformerLM(
+        vocab_size=64, context_length=32,
+        d_model=64, num_layers=2, num_heads=4, d_ff=128,
+        tie_weights=False, pre_norm=False,
+    )
+    model.eval()
+    ids = torch.randint(0, 64, (1, 10))
+
+    with torch.no_grad():
+        ref_logits = model(ids)[0, -1, :]
+        _, caches = model.forward_with_cache(ids[:, :-1], None, 0)
+        out, _    = model.forward_with_cache(ids[:, -1:], caches, ids.shape[1] - 1)
+    cached_logits = out[0, -1, :]
+
+    assert torch.allclose(ref_logits, cached_logits, atol=1e-4), \
+        f"max diff = {(ref_logits - cached_logits).abs().max()}"
+
+
+def test_kv_cache_matches_full_forward_no_norm():
+    """use_norm=False must also round-trip through the cached path."""
+    torch.manual_seed(11)
+    model = TransformerLM(
+        vocab_size=64, context_length=32,
+        d_model=64, num_layers=2, num_heads=4, d_ff=128,
+        tie_weights=False, use_norm=False,
+    )
+    model.eval()
+    ids = torch.randint(0, 64, (1, 10))
+
+    with torch.no_grad():
+        ref_logits = model(ids)[0, -1, :]
+        _, caches = model.forward_with_cache(ids[:, :-1], None, 0)
+        out, _    = model.forward_with_cache(ids[:, -1:], caches, ids.shape[1] - 1)
+    cached_logits = out[0, -1, :]
+
+    assert torch.allclose(ref_logits, cached_logits, atol=1e-4), \
+        f"max diff = {(ref_logits - cached_logits).abs().max()}"

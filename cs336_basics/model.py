@@ -141,13 +141,23 @@ class TransformerBlock(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
     ):
         if return_cache or kv_cache is not None:
-            # KV-cached path (always pre-norm; caching during training is unsupported).
-            attn_out, new_cache = self.attn(
-                self.attn_norm(x), kv_cache=kv_cache,
-                position_offset=position_offset, return_cache=True,
-            )
-            x = x + attn_out
-            x = x + self.ff(self.ff_norm(x))
+            # KV-cached path (inference only) — must mirror the training
+            # wiring exactly, including the post-norm ablation, or cached
+            # generation silently computes a different network.
+            if self.pre_norm:
+                attn_out, new_cache = self.attn(
+                    self.attn_norm(x), kv_cache=kv_cache,
+                    position_offset=position_offset, return_cache=True,
+                )
+                x = x + attn_out
+                x = x + self.ff(self.ff_norm(x))
+            else:
+                attn_out, new_cache = self.attn(
+                    x, kv_cache=kv_cache,
+                    position_offset=position_offset, return_cache=True,
+                )
+                x = self.attn_norm(x + attn_out)
+                x = self.ff_norm(x + self.ff(x))
             return x, new_cache
 
         if self.pre_norm:
@@ -367,7 +377,9 @@ class TransformerLM(nn.Module):
         Iterate to drive generation; break early to stop.
         """
         self.eval()
-        tokens = prompt_ids
+        # RoPE tables only cover context_length positions; a longer prompt
+        # would index past them and crash. Keep the most recent window.
+        tokens = prompt_ids[:, -self.context_length:]
 
         kv_caches: Optional[ModelKVCache] = None
         if use_cache:
@@ -390,9 +402,15 @@ class TransformerLM(nn.Module):
                 break
 
             # Truncate (and reset the cache) if we exceed the context window.
+            # Drop back *below* the window by a margin (hysteresis): keeping
+            # exactly context_length tokens would force a full re-prefill on
+            # every subsequent step, turning long generations O(T·ctx) per
+            # token. With the margin, each re-prefill buys `margin` cheap
+            # cached steps before the next one.
             if tokens.shape[1] > self.context_length:
                 kv_caches = None
-                tokens = tokens[:, -self.context_length:]
+                margin = min(64, max(1, self.context_length // 8))
+                tokens = tokens[:, -(self.context_length - margin):]
                 if use_cache:
                     logits, kv_caches = self.forward_with_cache(tokens, None, 0)
                 else:
