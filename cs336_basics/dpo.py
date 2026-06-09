@@ -49,6 +49,11 @@ def sequence_log_probs(
     Returns:
         (B,) — per-sequence sum of response log-probabilities.
     """
+    # DPO's signal is a *difference* of per-sequence log-prob sums; in bf16
+    # (~3 significant digits) the rounding error of a ~500-term sum is the
+    # same order as the signal itself. Upcast before the log-softmax.
+    logits = logits.float()
+
     # Numerically stable log-softmax (same pattern as training.cross_entropy_loss).
     logits_max = logits.max(dim=-1, keepdim=True).values
     shifted = logits - logits_max
@@ -60,6 +65,9 @@ def sequence_log_probs(
     ).squeeze(-1)                                            # (B, T)
 
     mask = response_mask.to(target_lp.dtype)
+    # `where`, not bare multiplication: NaN at a masked position (fully
+    # padded row) would otherwise survive as NaN * 0 = NaN.
+    target_lp = torch.where(mask > 0, target_lp, torch.zeros_like(target_lp))
     return (target_lp * mask).sum(dim=-1)                    # (B,)
 
 

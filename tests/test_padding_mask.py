@@ -86,3 +86,33 @@ def test_masked_loss_all_ones_matches_mean():
     plain  = cross_entropy_loss(logits.view(-1, 8), targets.view(-1))
     assert torch.allclose(masked, plain, atol=1e-6), \
         f"masked={masked.item()} plain={plain.item()}"
+
+
+def test_masked_loss_ignores_nan_at_masked_positions():
+    """NaN logits at masked-out positions (e.g. from a fully-padded row)
+    must not leak into the loss — NaN * 0 = NaN, so the masking has to use
+    `where`, not bare multiplication."""
+    logits = torch.randn(2, 4, 8)
+    logits[1] = float("nan")                       # entire second row poisoned
+    targets = torch.randint(0, 8, (2, 4))
+    mask = torch.ones(2, 4)
+    mask[1] = 0.0                                  # ...but fully masked out
+
+    loss = masked_cross_entropy_loss(logits, targets, mask)
+    assert torch.isfinite(loss), f"NaN leaked through the loss mask: {loss}"
+
+    from cs336_basics.training import cross_entropy_loss
+    clean = cross_entropy_loss(logits[0].view(-1, 8), targets[0].view(-1))
+    assert torch.allclose(loss, clean, atol=1e-6), \
+        "masked loss should equal the clean row's mean CE"
+
+
+def test_dpo_sequence_log_probs_ignore_nan_at_masked_positions():
+    from cs336_basics.dpo import sequence_log_probs
+    logits = torch.randn(2, 4, 8)
+    logits[:, :2, :] = float("nan")                # NaN outside the response
+    targets = torch.randint(0, 8, (2, 4))
+    mask = torch.zeros(2, 4)
+    mask[:, 2:] = 1.0
+    lp = sequence_log_probs(logits, targets, mask)
+    assert torch.isfinite(lp).all(), f"NaN leaked through the response mask: {lp}"

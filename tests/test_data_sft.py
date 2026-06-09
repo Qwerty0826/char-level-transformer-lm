@@ -126,3 +126,20 @@ def test_end_to_end_loss_finite(tokenizer):
     loss.backward()  # gradient flows cleanly through masked positions
     grad_norm = sum(p.grad.pow(2).sum() for p in model.parameters() if p.grad is not None)
     assert torch.isfinite(grad_norm), "gradients are non-finite"
+
+
+def test_collator_rejects_degenerate_examples(tokenizer):
+    """A <2-token example would become an all-padding row whose fully-blocked
+    attention softmaxes to NaN and poisons the whole batch — the collator
+    must refuse it instead of silently emitting it."""
+    messages = [
+        Message(role="user",      content="Hi."),
+        Message(role="assistant", content="Hello."),
+    ]
+    good = format_sft_example(messages, tokenizer, max_length=64)
+    pad_id = tokenizer.encode(EOT)[0]
+
+    with pytest.raises(ValueError, match="at least 2"):
+        pad_and_collate([good, ([pad_id], [1])], max_length=64, pad_id=pad_id)
+    with pytest.raises(ValueError, match="at least 2"):
+        pad_and_collate([([], [])], max_length=64, pad_id=pad_id)

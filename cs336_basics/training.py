@@ -85,6 +85,10 @@ def masked_cross_entropy_loss(
 
     nll = -target_log_probs                                    # (...)
     mask = loss_mask.to(nll.dtype)
+    # Zero masked positions with `where`, not multiplication: if a masked
+    # position carries NaN/inf logits (e.g. from a fully-padded row),
+    # NaN * 0 = NaN would poison the batch loss.
+    nll = torch.where(mask > 0, nll, torch.zeros_like(nll))
     denom = mask.sum().clamp_min(1.0)                          # guard /0
     return (nll * mask).sum() / denom
 

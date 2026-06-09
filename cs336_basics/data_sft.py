@@ -109,7 +109,15 @@ def pad_and_collate(
         tok_mask = tok_mask[:L]
         n = len(tok_ids)
         if n < 2:
-            continue
+            # An all-padding row has an all-False attention mask; its fully
+            # blocked attention row softmaxes to NaN, which then poisons the
+            # loss of the ENTIRE batch (NaN·0 = NaN survives the loss mask).
+            # Refuse loudly instead of emitting a poison row.
+            raise ValueError(
+                f"example {i} has {n} token(s) after truncation; at least 2 "
+                "are required to form an (input, target) pair — filter such "
+                "examples out before collation"
+            )
 
         # input[t] = seq[t], target[t] = seq[t+1] for t in [0, n-2].
         ids_t  = torch.tensor(tok_ids,  dtype=torch.long)
