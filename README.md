@@ -143,6 +143,12 @@ sits inside the judge's noise band at this scale, even though the
 training-side numbers say DPO is doing exactly what it should. Running
 the same eval with the larger Qwen2.5-14B judge gave the same picture.
 
+*Protocol note: these numbers were measured with every model — base
+included — prompted through the chat template. `eval_all.py` has since
+been corrected to give the base model the raw instruction (it never saw
+the chat tags in pretraining, unlike SFT/DPO), so a re-run should
+narrow, not erase, the SFT-vs-base gap.*
+
 → Held-out PPL, SFT trainer hyperparameters, two-judge
 cross-validation, KV-cache crossover sweep, hardware reference, and
 extended sample completions are in
