@@ -22,10 +22,10 @@ import math
 import numpy as np
 import torch
 
+from cs336_basics.evaluation import compute_bpc
 from cs336_basics.model import TransformerLM
 from cs336_basics.tokenizer import Tokenizer
 from cs336_basics.training import cross_entropy_loss, get_batch
-from scripts.generate import compute_bpc
 
 
 def parse_args() -> argparse.Namespace:

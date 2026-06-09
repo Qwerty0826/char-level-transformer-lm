@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from huggingface_hub import snapshot_download
 
 # Provided by ``cs336-basics`` installed from GitHub via requirements.txt.
-from scripts.playground import build_ui, load_models
+from cs336_basics.playground import build_ui, load_models
 
 
 MODEL_REPO = os.environ.get("MODEL_REPO", "Grux11/transformer-lm-60m-tinystories")

@@ -45,8 +45,12 @@ all = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Only the library ships in the wheel. Installing a top-level package named
+# `scripts` would squat a generic name in every consumer's site-packages;
+# everything external consumers need (incl. the Spaces UI) lives in
+# cs336_basics.
 [tool.hatch.build.targets.wheel]
-packages = ["cs336_basics", "scripts"]
+packages = ["cs336_basics"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

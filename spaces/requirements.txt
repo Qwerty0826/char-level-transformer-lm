@@ -4,7 +4,8 @@ huggingface_hub>=0.28.1
 # Python 3.13 removed the `audioop` stdlib module; pydub (a Gradio
 # transitive dep) needs it. `audioop-lts` provides a drop-in.
 audioop-lts ; python_version >= "3.13"
-# Install the project (cs336_basics + scripts packages) from GitHub so
-# the Space has the playground UI and model code without duplicating it.
-# Brings in torch, numpy, regex, einops, pyyaml, tqdm as transitive deps.
+# Install the cs336_basics package from GitHub so the Space has the
+# playground UI (cs336_basics.playground) and model code without
+# duplicating it. Brings in torch, numpy, regex, einops, pyyaml, tqdm
+# as transitive deps.
 cs336-basics @ git+https://github.com/Qwerty0826/char-level-transformer-lm.git@main
