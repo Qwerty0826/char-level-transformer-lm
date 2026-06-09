@@ -9,10 +9,8 @@ pre-tokenization and incremental pair-count updates during merging.
 from __future__ import annotations
 
 import json
-import os
 import re as _re
 from collections import defaultdict
-from itertools import chain
 from multiprocessing import Pool, cpu_count
 from typing import Iterable, Iterator, Optional
 

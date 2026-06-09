@@ -44,7 +44,6 @@ from cs336_basics.training import (
 
 
 def parse_args() -> argparse.Namespace:
-    import sys
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)
     pre_args, _ = pre.parse_known_args()

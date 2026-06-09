@@ -2,10 +2,7 @@
 Unit tests for training utilities.
 """
 
-import io
-import math
 import numpy as np
-import pytest
 import torch
 
 from cs336_basics.model import TransformerLM
@@ -66,13 +63,14 @@ def test_clip_reduces_norm():
     p.grad = torch.ones(100)
     norm_before = clip_gradient_norm([p], max_norm=1.0)
     norm_after  = p.grad.norm().item()
+    assert norm_before.item() == 10.0  # pre-clip norm is returned
     assert abs(norm_after - 1.0) < 1e-5
 
 
 def test_clip_noop_when_below():
     p = torch.nn.Parameter(torch.ones(4))
     p.grad = torch.ones(4) * 0.1  # norm = 0.2
-    norm_before = clip_gradient_norm([p], max_norm=1.0)
+    clip_gradient_norm([p], max_norm=1.0)
     assert (p.grad - 0.1).abs().max() < 1e-6  # unchanged
 
 

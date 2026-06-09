@@ -214,7 +214,6 @@ def build_ui(
     eos_id: Optional[int],
 ) -> gr.Blocks:
     base = models["base"]["model"]
-    base_step = models["base"]["step"]
     stream_fn, oneshot_fn = make_generator(base, tokenizer, device, eos_id)
     # Per-checkpoint one-shot generators for the Aligned tab.
     oneshot_by_tag: dict[str, Callable] = {

@@ -22,7 +22,6 @@ invariants:
 
 import math
 
-import pytest
 import torch
 
 from cs336_basics.dpo import _log_sigmoid, dpo_loss, sequence_log_probs

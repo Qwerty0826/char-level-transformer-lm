@@ -22,7 +22,6 @@ import math
 import numpy as np
 import torch
 
-from cs336_basics.evaluation import compute_bpc
 from cs336_basics.model import TransformerLM
 from cs336_basics.tokenizer import Tokenizer
 from cs336_basics.training import cross_entropy_loss, get_batch
@@ -110,7 +109,7 @@ def main():
     ppl = math.exp(avg_loss)
     bpc = avg_loss / math.log(2)
 
-    print(f"\n=== Evaluation Results ===")
+    print("\n=== Evaluation Results ===")
     print(f"  Avg loss (nats): {avg_loss:.4f}")
     print(f"  Perplexity:      {ppl:.2f}")
     print(f"  Bits-per-token:  {bpc:.4f}")

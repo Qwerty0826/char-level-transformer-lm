@@ -515,7 +515,7 @@ def load_model(args: argparse.Namespace) -> None:
 
     n_params = model.num_parameters()
     print(f"[serve] Loaded checkpoint (step {ckpt.get('iteration', '?')}, {n_params:,} params)")
-    print(f"[serve] Ready at  /v1/chat/completions  /v1/completions  /v1/models  /health")
+    print("[serve] Ready at  /v1/chat/completions  /v1/completions  /v1/models  /health")
 
 
 def main() -> None:

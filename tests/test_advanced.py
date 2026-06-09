@@ -3,7 +3,6 @@ Tests for advanced features: KV cache equivalence, Grouped Query Attention,
 chunked attention, and the autoregressive generate() helper.
 """
 
-import pytest
 import torch
 
 from cs336_basics.attention import (

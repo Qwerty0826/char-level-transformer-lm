@@ -52,7 +52,6 @@ from cs336_basics.training import (
 def parse_args() -> argparse.Namespace:
     # Pre-parse to detect --config so YAML values become argparse defaults.
     # Explicit CLI args always win over the YAML file.
-    import sys
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=None)
     pre_args, _ = pre.parse_known_args()

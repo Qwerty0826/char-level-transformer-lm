@@ -2,7 +2,6 @@
 Unit tests for neural network components and the Transformer LM.
 """
 
-import math
 import pytest
 import torch
 
@@ -12,7 +11,7 @@ from cs336_basics.attention import (
     scaled_dot_product_attention,
     softmax,
 )
-from cs336_basics.model import SwiGLUFeedForward, TransformerBlock, TransformerLM
+from cs336_basics.model import SwiGLUFeedForward, TransformerLM
 from cs336_basics.nn_components import Embedding, Linear, RMSNorm
 
 

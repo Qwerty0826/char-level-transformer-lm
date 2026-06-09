@@ -11,7 +11,6 @@ Two invariants:
    sequence right-padded with garbage tokens that are masked out.
 """
 
-import pytest
 import torch
 
 from cs336_basics.model import TransformerLM

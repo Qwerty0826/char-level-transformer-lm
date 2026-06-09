@@ -27,7 +27,6 @@ Output files (default --output_dir=data/):
 from __future__ import annotations
 
 import argparse
-import os
 import time
 from pathlib import Path
 
@@ -217,8 +216,8 @@ def main():
         ids = tokenizer.encode(tok)
         print(f"  {tok!r:18s} -> {ids}")
 
-    print(f"\nReady to train. Example:")
-    print(f"  python scripts/train.py --config configs/tinystories_60m.yaml")
+    print("\nReady to train. Example:")
+    print("  python scripts/train.py --config configs/tinystories_60m.yaml")
 
 
 if __name__ == "__main__":
