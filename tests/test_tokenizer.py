@@ -71,3 +71,50 @@ def test_decode_invalid_ids_no_crash(tiny_tokenizer):
     # Should replace undecodable bytes with U+FFFD, not crash
     result = tok.decode([0, 1, 2, 3])
     assert isinstance(result, str)
+
+
+def test_encode_stream_matches_whole_encode(tiny_tokenizer):
+    """Chunked streaming must produce the exact IDs of a whole-text encode,
+    even when the raw chunk size would split words or the special token."""
+    import io
+
+    tok = tiny_tokenizer
+    text = (
+        "low lower newest<|endoftext|>widest stories here\n"
+        "another line<|endoftext|>and a tail without separator"
+    )
+    whole = tok.encode(text)
+
+    # Sweep pathological chunk sizes — several land mid-word and inside
+    # <|endoftext|>, which a naive read/encode loop would shatter.
+    for chunk_chars in (1, 3, 5, 7, 11, 64):
+        streamed: list[int] = []
+        for ids in tok.encode_stream(
+            io.StringIO(text), chunk_chars=chunk_chars, boundary="<|endoftext|>",
+        ):
+            streamed.extend(ids)
+        assert streamed == whole, f"mismatch at chunk_chars={chunk_chars}"
+
+
+def test_encode_stream_newline_fallback(tiny_tokenizer):
+    """Without the boundary token in the text, splitting falls back to
+    whitespace-run boundaries and must still match the whole-text encode."""
+    import io
+
+    tok = tiny_tokenizer
+    text = "low lower\nnewest widest\n  indented line\nno trailing newline"
+    whole = tok.encode(text)
+    for chunk_chars in (2, 6, 13):
+        streamed: list[int] = []
+        for ids in tok.encode_stream(
+            io.StringIO(text), chunk_chars=chunk_chars, boundary="<|endoftext|>",
+        ):
+            streamed.extend(ids)
+        assert streamed == whole, f"mismatch at chunk_chars={chunk_chars}"
+
+
+def test_constructor_does_not_mutate_caller_vocab():
+    vocab = {i: bytes([i]) for i in range(256)}
+    before = dict(vocab)
+    Tokenizer(vocab, [], special_tokens=["<|endoftext|>"])
+    assert vocab == before, "Tokenizer.__init__ must not mutate the vocab passed in"

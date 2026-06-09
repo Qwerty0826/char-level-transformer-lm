@@ -138,12 +138,13 @@ def encode_corpus(
     t0 = time.time()
     all_ids: list[int] = []
 
+    # encode_stream only cuts at <|endoftext|> (or whitespace-run) boundaries,
+    # so chunking never splits a pre-token or shatters a document separator.
     with open(input_txt, "r", encoding="utf-8") as fh:
-        while True:
-            chunk = fh.read(chunk_bytes)
-            if not chunk:
-                break
-            all_ids.extend(tokenizer.encode(chunk))
+        for ids in tokenizer.encode_stream(
+            fh, chunk_chars=chunk_bytes, boundary=CHAT_SPECIALS[0],
+        ):
+            all_ids.extend(ids)
             pct = fh.tell() / total_bytes * 100
             print(f"  {pct:5.1f}%  {len(all_ids):,} tokens", end="\r", flush=True)
 

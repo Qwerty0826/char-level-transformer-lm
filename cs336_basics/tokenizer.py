@@ -63,7 +63,10 @@ def _pretokenize_chunk(args: tuple) -> dict[tuple[bytes, ...], int]:
     word_freqs: dict[tuple[bytes, ...], int] = defaultdict(int)
 
     if special_tokens:
-        split_pat = "|".join(_re.escape(t) for t in special_tokens)
+        # Longest first, so an overlapping shorter special never shadows a
+        # longer one (mirrors Tokenizer.encode's split regex).
+        sorted_toks = sorted(special_tokens, key=len, reverse=True)
+        split_pat = "|".join(_re.escape(t) for t in sorted_toks)
         parts = _re.split(split_pat, chunk)
     else:
         parts = [chunk]
@@ -281,7 +284,9 @@ class Tokenizer:
         merges: list[tuple[bytes, bytes]],
         special_tokens: Optional[list[str]] = None,
     ) -> None:
-        self._vocab: dict[int, bytes] = vocab
+        # Copy: registering special tokens below may grow the vocab, and we
+        # must not mutate the dict the caller handed in.
+        self._vocab: dict[int, bytes] = dict(vocab)
         self._merges: list[tuple[bytes, bytes]] = merges
 
         # Reverse lookup: bytes → token ID
@@ -392,6 +397,52 @@ class Tokenizer:
         """Memory-efficient encoding of an iterable of strings."""
         for chunk in iterable:
             yield from self.encode(chunk)
+
+    def encode_stream(
+        self,
+        fh,
+        chunk_chars: int = 10 * 1024 * 1024,
+        boundary: str = "<|endoftext|>",
+    ) -> Iterator[list[int]]:
+        """
+        Memory-bounded encoding of a text stream, yielding lists of token IDs.
+
+        Naively encoding fixed-size ``fh.read()`` chunks splits pre-tokens
+        (and special tokens) wherever a chunk boundary falls, producing
+        different IDs than encoding the whole text — including shattering
+        ``<|endoftext|>`` into raw bytes. This method only ever cuts at a
+        position no pre-token can span:
+
+          1. preferably at the start of the last ``boundary`` occurrence
+             (special tokens are atomic, so this is always exact), or
+          2. at the start of the whitespace run containing the last newline
+             (the GPT-2 pattern never merges a pre-token across the start
+             of a whitespace run),
+
+        carrying the remainder into the next chunk.
+        """
+        pending = ""
+        while True:
+            chunk = fh.read(chunk_chars)
+            if not chunk:
+                break
+            pending += chunk
+
+            cut = pending.rfind(boundary) if boundary else -1
+            if cut == -1:
+                cut = pending.rfind("\n")
+                # Back up to the start of the whitespace run so the run
+                # stays intact in the remainder.
+                while cut > 0 and pending[cut - 1].isspace():
+                    cut -= 1
+            if cut <= 0:
+                continue        # no safe split point yet; keep accumulating
+
+            yield self.encode(pending[:cut])
+            pending = pending[cut:]
+
+        if pending:
+            yield self.encode(pending)
 
     # ------------------------------------------------------------------
     # Decoding

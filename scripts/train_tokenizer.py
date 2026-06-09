@@ -86,18 +86,18 @@ def main():
         print(f"\nEncoding {args.encode!r} -> {out_path!r} ...")
 
         file_size = os.path.getsize(args.encode)
-        chunk_bytes = args.encode_chunk_bytes
+        boundary = args.special_tokens[0] if args.special_tokens else ""
 
         all_ids = []
         n_tokens = 0
         t1 = time.time()
 
+        # encode_stream never cuts a chunk mid-pre-token (or mid-special-token),
+        # so the streamed IDs match a whole-file encode exactly.
         with open(args.encode, "r", encoding="utf-8") as fh:
-            while True:
-                chunk = fh.read(chunk_bytes)
-                if not chunk:
-                    break
-                ids = tokenizer.encode(chunk)
+            for ids in tokenizer.encode_stream(
+                fh, chunk_chars=args.encode_chunk_bytes, boundary=boundary,
+            ):
                 all_ids.extend(ids)
                 n_tokens += len(ids)
                 pct = fh.tell() / file_size * 100
