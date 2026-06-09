@@ -49,6 +49,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from cs336_basics.data_sft import ASSISTANT_TAG, EOT, SYSTEM_TAG, USER_TAG
 from cs336_basics.model import TransformerLM
 from cs336_basics.streaming import StreamingDecoder
 from cs336_basics.tokenizer import Tokenizer
@@ -103,6 +104,7 @@ class _State:
     device: str = "cpu"
     eos_id: Optional[int] = None
     model_name: str = "transformer-lm"
+    chat_template: bool = False    # use the SFT chat template for /v1/chat/completions
 
 STATE = _State()
 
@@ -125,14 +127,27 @@ app.add_middleware(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _format_chat(messages: List[ChatMessage]) -> str:
+def _format_chat(messages: List[ChatMessage], chat_template: bool = False) -> str:
     """
-    Flatten a multi-turn message list into a single prompt for a base LM.
+    Flatten a multi-turn message list into a single prompt.
 
-    Uses a plain ``Role: text`` format with an open ``Assistant:`` tail so
-    the model knows where to continue.  System messages are prepended
-    verbatim.  Works reasonably with any base LM regardless of training.
+    ``chat_template=False`` (default): plain ``Role: text`` format with an
+    open ``Assistant:`` tail — works reasonably with any *base* LM
+    regardless of training.
+
+    ``chat_template=True``: the exact SFT/DPO training format from
+    ``cs336_basics.data_sft``::
+
+        <|system|>{sys}<|endoftext|><|user|>{msg}<|endoftext|><|assistant|>{reply}<|endoftext|>...<|assistant|>
+
+    Required when serving post-trained checkpoints — they were never
+    trained on the ``User:/Assistant:`` convention and produce noticeably
+    worse output with it.
     """
+    if chat_template:
+        tag = {"system": SYSTEM_TAG, "user": USER_TAG, "assistant": ASSISTANT_TAG}
+        return "".join(f"{tag[m.role]}{m.content}{EOT}" for m in messages) + ASSISTANT_TAG
+
     parts: List[str] = []
     for m in messages:
         if m.role == "system":
@@ -221,7 +236,7 @@ def list_models() -> Dict[str, Any]:
 def chat_completions(req: ChatCompletionRequest):
     if STATE.model is None:
         raise HTTPException(503, "Model not loaded")
-    prompt = _format_chat(req.messages)
+    prompt = _format_chat(req.messages, chat_template=STATE.chat_template)
     prompt_ids = _encode_prompt(prompt)
     cmpl_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
@@ -444,6 +459,11 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--model_name", default="transformer-lm",
                    help="ID returned by /v1/models and echoed in responses")
+    p.add_argument("--chat_template", action="store_true",
+                   help="Format /v1/chat/completions prompts with the SFT chat "
+                        "template (<|user|>…<|endoftext|><|assistant|>) instead of "
+                        "the plain 'User:/Assistant:' fallback. Use when serving "
+                        "SFT or DPO checkpoints.")
     p.add_argument("--device", default=None)
     p.add_argument("--host",   default="0.0.0.0")
     p.add_argument("--port",   type=int, default=8000)
@@ -489,6 +509,9 @@ def load_model(args: argparse.Namespace) -> None:
     STATE.device = device
     STATE.eos_id = eos_id
     STATE.model_name = args.model_name
+    STATE.chat_template = args.chat_template
+    if args.chat_template:
+        print("[serve] Chat template enabled (SFT/DPO checkpoint formatting)")
 
     n_params = model.num_parameters()
     print(f"[serve] Loaded checkpoint (step {ckpt.get('iteration', '?')}, {n_params:,} params)")

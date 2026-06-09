@@ -116,6 +116,27 @@ def test_format_chat_multi_turn():
     assert prompt.endswith("Assistant:")
 
 
+def test_format_chat_sft_template():
+    """--chat_template must produce the exact training-time format from
+    cs336_basics.data_sft, with an open assistant tag at the end."""
+    from cs336_basics.data_sft import ASSISTANT_TAG, EOT, SYSTEM_TAG, USER_TAG
+    from scripts.serve import ChatMessage
+    msgs = [
+        ChatMessage(role="system",    content="You are concise."),
+        ChatMessage(role="user",      content="Hi."),
+        ChatMessage(role="assistant", content="Hello!"),
+        ChatMessage(role="user",      content="Tell me a story."),
+    ]
+    prompt = _format_chat(msgs, chat_template=True)
+    assert prompt == (
+        f"{SYSTEM_TAG}You are concise.{EOT}"
+        f"{USER_TAG}Hi.{EOT}"
+        f"{ASSISTANT_TAG}Hello!{EOT}"
+        f"{USER_TAG}Tell me a story.{EOT}"
+        f"{ASSISTANT_TAG}"
+    )
+
+
 def test_stop_hit_finds_earliest():
     # "and" appears at index 17 ("once upon a time "), well before "end" at 27.
     assert _stop_hit("once upon a time and then end here", ["end", "and"]) == 17
